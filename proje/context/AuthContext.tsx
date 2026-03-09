@@ -1,21 +1,20 @@
-// context/AuthContext.tsx - TAM VE EKSİKSİZ REVİZYON
-import React, { 
-  createContext, 
-  useContext, 
-  useState, 
-  useEffect, 
-  ReactNode, 
-  useCallback 
-} from 'react';
-import { User, ChipPackage, AchievementDefinition } from '@/types/user'; // ChipPackage eklendi
+// context/AuthContext.tsx
 import { DeviceService } from '@/services/deviceService';
 import { UserService } from '@/services/userService';
-// AchievementService importunu varsayıyoruz
-import { AchievementService } from '@/services/achievementService'; 
+import { ChipPackage, User } from '@/types/user'; // AchievementDefinition kaldırıldı
+import React, {
+  createContext,
+  ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState
+} from 'react';
+// AchievementService kaldırıldı (kullanılmıyordu)
 
-// Refresh Limitleri için sabitler
 const REFRESH_LIMIT = 3;
-const REFRESH_COOLDOWN_MS = 60000; // 1 dakika (60000 milisaniye)
+const REFRESH_COOLDOWN_MS = 60000;
 
 interface AuthContextType {
   user: User | null;
@@ -25,12 +24,10 @@ interface AuthContextType {
   updateBalance: (newBalance: number) => Promise<void>;
   updateHighScore: (score: number) => Promise<void>;
   logout: () => void;
-  // YENİ: Veri yenileme fonksiyonu ve durumu
   refreshUserData: (source: 'scoreboard' | 'collection') => Promise<{ success: boolean; message: string }>;
   canRefreshScoreboard: boolean;
   canRefreshCollection: boolean;
-  getRemainingCooldown: (source: 'scoreboard' | 'collection') => number; // Yeni: Kalan süreyi alma
-  // YENİ: Çip Satın Alma
+  getRemainingCooldown: (source: 'scoreboard' | 'collection') => number;
   buyChips: (chipPackage: ChipPackage) => Promise<void>;
 }
 
@@ -40,47 +37,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   
-  // YENİ: Refresh State'leri
-  // Sayaçlar (Kaç kez yenileme yapıldı)
   const [scoreboardRefreshCount, setScoreboardRefreshCount] = useState(0);
   const [collectionRefreshCount, setCollectionRefreshCount] = useState(0);
-  
-  // Cooldown Bitiş Zamanları (Timestamp)
   const [scoreboardCooldown, setScoreboardCooldown] = useState(0); 
   const [collectionCooldown, setCollectionCooldown] = useState(0); 
-  
-  const getRemainingTime = (cooldownTimestamp: number): number => {
+
+  // useCallback ile memoize edildi
+  const getRemainingTime = useCallback((cooldownTimestamp: number): number => {
     const now = Date.now();
     return cooldownTimestamp > now ? Math.ceil((cooldownTimestamp - now) / 1000) : 0;
-  };
+  }, []);
   
   const getRemainingCooldown = useCallback((source: 'scoreboard' | 'collection'): number => {
     const cooldown = source === 'scoreboard' ? scoreboardCooldown : collectionCooldown;
     return getRemainingTime(cooldown);
-  }, [scoreboardCooldown, collectionCooldown]);
+  }, [scoreboardCooldown, collectionCooldown, getRemainingTime]);
 
+  // canRefresh değerleri useMemo ile hesaplanıyor
+  const canRefreshScoreboard = useMemo(() => 
+    getRemainingTime(scoreboardCooldown) === 0, 
+    [scoreboardCooldown, getRemainingTime]
+  );
+  
+  const canRefreshCollection = useMemo(() => 
+    getRemainingTime(collectionCooldown) === 0, 
+    [collectionCooldown, getRemainingTime]
+  );
 
-  // Cooldown süresi bitince sayacı sıfırlamak için useEffect
   useEffect(() => {
     const interval = setInterval(() => {
-        const now = Date.now();
-        
-        // Skor Tablosu için
-        if (scoreboardCooldown > 0 && scoreboardCooldown <= now) {
-            setScoreboardRefreshCount(0);
-            setScoreboardCooldown(0);
-        }
-        
-        // Koleksiyon için
-        if (collectionCooldown > 0 && collectionCooldown <= now) {
-            setCollectionRefreshCount(0);
-            setCollectionCooldown(0);
-        }
-    }, 1000); // Her saniye kontrol et
+      const now = Date.now();
+      
+      if (scoreboardCooldown > 0 && scoreboardCooldown <= now) {
+        setScoreboardRefreshCount(0); // Sayaç da sıfırlanıyor
+        setScoreboardCooldown(0);
+      }
+      
+      if (collectionCooldown > 0 && collectionCooldown <= now) {
+        setCollectionRefreshCount(0); // Sayaç da sıfırlanıyor
+        setCollectionCooldown(0);
+      }
+    }, 1000);
     
     return () => clearInterval(interval);
   }, [scoreboardCooldown, collectionCooldown]);
-
 
   useEffect(() => {
     checkDeviceAndUser();
@@ -91,10 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsLoading(true);
       const deviceId = await DeviceService.getDeviceId();
       const existingUser = await UserService.getUserByDeviceId(deviceId);
-      
-      if (existingUser) {
-        setUser(existingUser);
-      }
+      if (existingUser) setUser(existingUser);
     } catch (error) {
       console.error('❌ Başlangıç yükleme hatası:', error);
     } finally {
@@ -116,25 +113,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const updateBalance = async (newBalance: number) => {
     if (!user) return;
-    
     try {
       await UserService.updateUserBalance(user.deviceId, newBalance);
       setUser(prev => prev ? { ...prev, balance: newBalance } : null);
-      console.log('💰 Bakiye (Çip) güncellendi:', newBalance);
     } catch (error) {
-      console.error('❌ Bakiye (Çip) güncelleme hatası:', error);
+      console.error('❌ Bakiye güncelleme hatası:', error);
       throw error;
     }
   };
 
   const updateHighScore = async (score: number) => {
     if (!user) return;
-    
     try {
       if (score > user.highScore) {
         await UserService.updateHighScore(user.deviceId, score);
         setUser(prev => prev ? { ...prev, highScore: score } : null);
-        console.log('🏆 High score güncellendi:', score);
       }
     } catch (error) {
       console.error('❌ High score güncelleme hatası:', error);
@@ -142,95 +135,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
   
-  // YENİ: Çip Satın Alma
   const handleBuyChips = async (chipPackage: ChipPackage) => {
-      if (!user) throw new Error('Kullanıcı kayıtlı değil.');
-      try {
-          // Servis katmanında Firebase'e çip miktarını ekle
-          await UserService.buyChips(user.deviceId, chipPackage);
-          
-          // UI'ı anında güncelle (Firebase'den çekmeye gerek kalmadan)
-          setUser(prev => prev ? { 
-            ...prev, 
-            balance: prev.balance + chipPackage.chipAmount 
-          } : null);
-          console.log(`✅ ${chipPackage.chipAmount} çip satın alındı.`);
-      } catch (error) {
-          console.error('❌ Çip satın alma hatası:', error);
-          throw error;
-      }
+    if (!user) throw new Error('Kullanıcı kayıtlı değil.');
+    try {
+      await UserService.buyChips(user.deviceId, chipPackage);
+      setUser(prev => prev ? { ...prev, balance: prev.balance + chipPackage.chipAmount } : null);
+    } catch (error) {
+      console.error('❌ Çip satın alma hatası:', error);
+      throw error;
+    }
   };
 
-  // YENİ: Veri Yenileme Mekanizması
   const refreshUserData = useCallback(async (source: 'scoreboard' | 'collection') => {
     if (isLoading || !user) {
       return { success: false, message: 'Kullanıcı verisi yükleniyor.' };
     }
 
     const now = Date.now();
-    let currentCount, currentCooldown, setCount, setCooldown;
-
-    if (source === 'scoreboard') {
-        currentCount = scoreboardRefreshCount;
-        currentCooldown = scoreboardCooldown;
-        setCount = setScoreboardRefreshCount;
-        setCooldown = setScoreboardCooldown;
-    } else { // 'collection'
-        currentCount = collectionRefreshCount;
-        currentCooldown = collectionCooldown;
-        setCount = setCollectionRefreshCount;
-        setCooldown = setCollectionCooldown;
-    }
+    const isScoreboard = source === 'scoreboard';
+    const currentCount = isScoreboard ? scoreboardRefreshCount : collectionRefreshCount;
+    const currentCooldown = isScoreboard ? scoreboardCooldown : collectionCooldown;
+    const setCount = isScoreboard ? setScoreboardRefreshCount : setCollectionRefreshCount;
+    const setCooldown = isScoreboard ? setScoreboardCooldown : setCollectionCooldown;
     
-    // Cooldown kontrolü
     if (currentCooldown > now) {
-        const remainingSeconds = Math.ceil((currentCooldown - now) / 1000);
-        return { success: false, message: `Bekleme süresi: ${remainingSeconds} saniye sonra tekrar deneyebilirsiniz.` };
+      const remainingSeconds = Math.ceil((currentCooldown - now) / 1000);
+      return { success: false, message: `${remainingSeconds} saniye sonra tekrar deneyebilirsiniz.` };
     }
     
-    // Sayaç kontrolü
     if (currentCount >= REFRESH_LIMIT) {
-        // Yeni cooldown süresini belirle
-        const newCooldown = now + REFRESH_COOLDOWN_MS;
-        setCooldown(newCooldown);
-        // Bu noktada sayacı 1 artırmıyoruz, çünkü yenileme işlemi yapılmayacak,
-        // ancak kullanıcıya limit aşıldığı bilgisi verilecek.
-        const remainingSeconds = Math.ceil(REFRESH_COOLDOWN_MS / 1000);
-        return { success: false, message: `Yenileme limitini (${REFRESH_LIMIT} kez) aştınız. ${remainingSeconds} saniye beklemeniz gerekiyor.` };
+      const newCooldown = now + REFRESH_COOLDOWN_MS;
+      setCooldown(newCooldown);
+      setCount(0); // Edge case düzeltmesi: sayacı sıfırla
+      const remainingSeconds = Math.ceil(REFRESH_COOLDOWN_MS / 1000);
+      return { success: false, message: `Limit aşıldı. ${remainingSeconds} saniye beklemeniz gerekiyor.` };
     }
 
     try {
-      // YENİLEME İŞLEMİ
-      const deviceId = user.deviceId;
-      const refreshedUser = await UserService.getUserByDeviceId(deviceId);
-
+      const refreshedUser = await UserService.getUserByDeviceId(user.deviceId);
       if (refreshedUser) {
         setUser(refreshedUser);
-        setCount(prev => prev + 1); // Başarılı yenileme sayacını artır
+        setCount(prev => prev + 1);
         return { success: true, message: 'Veriler başarıyla yenilendi.' };
-      } else {
-        return { success: false, message: 'Kullanıcı verisi bulunamadı.' };
       }
+      return { success: false, message: 'Kullanıcı verisi bulunamadı.' };
     } catch (error) {
       console.error(`❌ ${source} yenileme hatası:`, error);
       return { success: false, message: 'Yenileme sırasında bir hata oluştu.' };
     }
-  }, [
-      user, 
-      isLoading, 
-      scoreboardRefreshCount, 
-      scoreboardCooldown, 
-      collectionRefreshCount, 
-      collectionCooldown
-  ]);
+  }, [user, isLoading, scoreboardRefreshCount, scoreboardCooldown, collectionRefreshCount, collectionCooldown]);
   
   const logout = () => {
     setUser(null);
-    console.log('🚪 Kullanıcı çıkış yaptı');
   };
-  
-  const canRefreshScoreboard = getRemainingTime(scoreboardCooldown) === 0;
-  const canRefreshCollection = getRemainingTime(collectionCooldown) === 0;
 
   const value: AuthContextType = {
     user,
@@ -244,7 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canRefreshScoreboard,
     canRefreshCollection,
     getRemainingCooldown,
-    buyChips: handleBuyChips, // Yeni çip satın alma fonksiyonu
+    buyChips: handleBuyChips,
   };
   
   return (

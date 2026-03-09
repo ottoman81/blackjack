@@ -1,5 +1,5 @@
 // src/constants/achievementData.ts - REVİZE EDİLMİŞ (HATA VEREN TİP ÇIKARILDI)
-
+export default {};
 import { AchievementDefinition } from '@/types/user';
 
 /**
