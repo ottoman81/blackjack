@@ -480,7 +480,7 @@ export default function BlackjackScreen() {
             <CardComponent
               key={card.id}
               card={card}
-              isHidden={index === 1 && gameState.gameStatus === 'player-turn'}
+              isHidden={false}
             />
           ))}
         </ScrollView>

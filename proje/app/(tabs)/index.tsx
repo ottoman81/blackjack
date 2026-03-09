@@ -1,649 +1,537 @@
-// app/(tabs)/index.tsx - TAM VE EKSİKSİZ REVİZYON
-import { 
-  StyleSheet, 
-  View, 
-  Text, 
-  ScrollView, 
-  TouchableOpacity, 
-  Modal, 
-  Alert,
-  TextInput // Bahis miktarını input ile yönetmek için
-} from 'react-native';
-import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'expo-router';
+// app/(tabs)/index.tsx
+import MultiplayerScreen from '@/app/multiplayer';
 import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/context/AuthContext';
-import { AchievementService, GameResult } from '@/services/achievementService';
 import { BlackjackService } from '@/services/blackjackService';
+import { Card, GameState, Suit } from '@/types/blackjack';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-// Bileşen importları
-import DealerArea from '@/components/blackjack/DealerArea';
-import PlayerArea from '@/components/blackjack/PlayerArea';
-import Controls from '@/components/blackjack/Controls';
-import GameStatus from '@/components/blackjack/GameStatus';
+type AppScreen = 'menu' | 'solo' | 'multi';
 
-// Tipler
-type Suit = 'hearts' | 'diamonds' | 'clubs' | 'spades';
-type Rank = '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
+// ─────────────────────────────────────────────
+// Ana Menü
+// ─────────────────────────────────────────────
+function MainMenu({ user, onSelect }: { user: any; onSelect: (mode: AppScreen) => void }) {
+  return (
+    <View style={menuStyles.container}>
+      <View style={menuStyles.header}>
+        <Text style={menuStyles.title}>♠️ Blackjack ♥️</Text>
+        <Text style={menuStyles.welcome}>Merhaba, {user?.name}!</Text>
+        <Text style={menuStyles.balance}>Bakiye: ${user?.balance ?? 0}</Text>
+      </View>
 
-interface Card {
-  suit: Suit;
-  rank: Rank;
-  value: number;
-  id: string;
+      <TouchableOpacity style={menuStyles.card} onPress={() => onSelect('solo')}>
+        <Text style={menuStyles.cardIcon}>🎰</Text>
+        <View style={menuStyles.cardText}>
+          <Text style={menuStyles.cardTitle}>Solo Oyna</Text>
+          <Text style={menuStyles.cardDesc}>Krupiyeye karşı tek başına oyna</Text>
+        </View>
+        <Text style={menuStyles.arrow}>›</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={[menuStyles.card, { borderColor: '#9b59b6' }]} onPress={() => onSelect('multi')}>
+        <Text style={menuStyles.cardIcon}>👥</Text>
+        <View style={menuStyles.cardText}>
+          <Text style={menuStyles.cardTitle}>Multiplayer</Text>
+          <Text style={menuStyles.cardDesc}>Arkadaşlarınla oyna</Text>
+        </View>
+        <Text style={menuStyles.arrow}>›</Text>
+      </TouchableOpacity>
+    </View>
+  );
 }
 
-// GameState interface'ine initialBet eklendi
-interface GameState {
-  playerCards: Card[];
-  dealerCards: Card[];
-  playerScore: number;
-  dealerScore: number;
-  gameStatus: 'waiting' | 'player-turn' | 'dealer-turn' | 'player-bust' | 'dealer-bust' | 'player-win' | 'dealer-win' | 'push';
-  deck: Card[];
-  betAmount: number;
-  balance: number;
-  initialBet: number; // ZORUNLU ALAN
-}
+const menuStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#0d1117', padding: 24, justifyContent: 'center' },
+  header:    { alignItems: 'center', marginBottom: 40 },
+  title:     { color: '#fff', fontSize: 32, fontWeight: 'bold', marginBottom: 12 },
+  welcome:   { color: '#3498db', fontSize: 18, fontWeight: 'bold' },
+  balance:   { color: '#27ae60', fontSize: 16, marginTop: 4 },
+  card:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#161b22', borderRadius: 14, padding: 18, marginBottom: 14, borderWidth: 1, borderColor: '#3498db' },
+  cardIcon:  { fontSize: 32, marginRight: 16 },
+  cardText:  { flex: 1 },
+  cardTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  cardDesc:  { color: '#8b949e', fontSize: 13, marginTop: 3 },
+  arrow:     { color: '#8b949e', fontSize: 26 },
+});
 
+// ─────────────────────────────────────────────
 // Header Component
-function GameHeader({ balance, name, onExit }: { balance: number; name: string; onExit: () => void }) {
+// ─────────────────────────────────────────────
+function GameHeader({ balance, name, onBack }: { balance: number; name: string; onBack: () => void }) {
   return (
     <View style={headerStyles.container}>
+      <TouchableOpacity style={headerStyles.backBtn} onPress={onBack}>
+        <Text style={headerStyles.backTxt}>‹ Menü</Text>
+      </TouchableOpacity>
       <Text style={headerStyles.title}>♠️ Blackjack ♥️</Text>
       <Text style={headerStyles.subtitle}>21'e En Yakın Kazanır!</Text>
       <View style={headerStyles.userInfo}>
         <Text style={headerStyles.userName}>Merhaba, {name}!</Text>
-        <Text style={headerStyles.balance}>Bakiye: 💰 {balance.toLocaleString()} Çip</Text>
+        <Text style={headerStyles.balance}>Bakiye: ${balance}</Text>
       </View>
-      
     </View>
   );
 }
 
 const headerStyles = StyleSheet.create({
-  container: {
-    padding: 20,
-    backgroundColor: '#2c3e50',
-    alignItems: 'center',
-    paddingTop: 50,
-  },
-  title: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  subtitle: { 
-    color: '#ecf0f1',
-    fontSize: 16,
-    marginTop: 5,
-  },
-  userInfo: {
-    marginTop: 10,
-    alignItems: 'center',
-  },
-  userName: {
-    color: '#ecf0f1',
-    fontSize: 16,
-  },
-  balance: {
-    color: '#2ecc71',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginTop: 5,
-  },
-  exitButton: {
-    position: 'absolute',
-    top: 60,
-    right: 20,
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: '#e74c3c',
-    zIndex: 10,
-  },
-  exitButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 14,
-  },
+  container: { padding: 20, backgroundColor: '#2c3e50', alignItems: 'center' },
+  backBtn:   { position: 'absolute', left: 16, top: 20 },
+  backTxt:   { color: '#3498db', fontSize: 16, fontWeight: 'bold' },
+  title:     { color: '#fff', fontSize: 24, fontWeight: 'bold' },
+  subtitle:  { color: '#ecf0f1', fontSize: 16, marginTop: 5 },
+  userInfo:  { marginTop: 10, alignItems: 'center' },
+  userName:  { color: '#3498db', fontSize: 16, fontWeight: 'bold' },
+  balance:   { color: '#27ae60', fontSize: 14, marginTop: 2 },
 });
 
-const INITIAL_BET = 50; // Minimum/Başlangıç bahis değeri olarak kabul edildi.
-const GAME_END_DELAY = 5000; // 5 saniye bekleme süresi
-
-export default function BlackjackScreen() {
-  const { user, updateBalance, updateHighScore, logout } = useAuth();
-  const router = useRouter();
-  
-  const [gameState, setGameState] = useState<GameState>({
-    playerCards: [],
-    dealerCards: [],
-    playerScore: 0,
-    dealerScore: 0,
-    gameStatus: 'waiting',
-    deck: BlackjackService.initializeDeck(),
-    betAmount: INITIAL_BET,
-    balance: user?.balance || 1000,
-    initialBet: INITIAL_BET, // Hata düzeltildi: initialBet eklendi
-  });
-  
-  const [showRulesModal, setShowRulesModal] = useState(false);
-
-  // Kullanıcı değiştiğinde bakiyeyi güncelle
-  useEffect(() => {
-    if (user) {
-      setGameState(prev => ({
-        ...prev,
-        balance: user.balance,
-      }));
-    }
-  }, [user]);
-  
-  // Çıkış işlemi
-  const handleLogout = useCallback(() => {
-    logout();
-  }, [logout]);
-
-  // Kart Çekme İşlemi
-  const drawCard = useCallback((currentDeck: Card[], receiver: 'player' | 'dealer'): { deck: Card[]; card: Card } => {
-    if (currentDeck.length === 0) {
-      Alert.alert('Hata', 'Deste boş! Yeni deste karıştırılıyor.');
-      const newDeck = BlackjackService.initializeDeck();
-      const [card, ...remainingDeck] = newDeck;
-      return { deck: remainingDeck, card };
-    }
-    const [card, ...deck] = currentDeck;
-    return { deck, card };
-  }, []);
-
-  // Skoru ve GameStatus'ü Güncelleme
-  const updateScoresAndStatus = useCallback((currentState: GameState, isDealerTurn = false): GameState => {
-    const playerScore = BlackjackService.calculateScore(currentState.playerCards);
-    const dealerScore = BlackjackService.calculateScore(currentState.dealerCards);
-    let newStatus: GameState['gameStatus'] = currentState.gameStatus;
-
-    // Sadece oyun sırasında statü kontrolü yap
-    if (currentState.gameStatus !== 'waiting') {
-        if (!isDealerTurn) {
-            if (playerScore > 21) {
-                newStatus = 'player-bust';
-            } else if (playerScore === 21 && currentState.playerCards.length === 2) {
-                newStatus = 'dealer-turn'; // Blackjack
-            }
-        } else {
-            if (dealerScore > 21) {
-                newStatus = 'dealer-bust';
-            } else if (dealerScore >= 17) {
-                if (playerScore > dealerScore || (playerScore <= 21 && dealerScore > 21)) {
-                    newStatus = 'player-win';
-                } else if (dealerScore > playerScore) {
-                    newStatus = 'dealer-win';
-                } else {
-                    newStatus = 'push';
-                }
-            }
-        }
-    }
-    
-    return { 
-      ...currentState, 
-      playerScore, 
-      dealerScore, 
-      gameStatus: newStatus 
-    };
-  }, []);
-
-  // Game Over işlemleri
-  const handleGameEnd = useCallback(async (finalState: GameState, isDoubleDown: boolean) => {
-    if (!user) return;
-
-    let balanceChange = 0;
-    let win = false;
-    let blackjack = false;
-    
-    // Kazanma/Kaybetme durumu belirleme
-    if (finalState.gameStatus === 'player-win' || finalState.gameStatus === 'dealer-bust') {
-      balanceChange = finalState.betAmount * 2;
-      win = true;
-      if (finalState.playerScore === 21 && finalState.playerCards.length === 2) {
-        balanceChange = Math.floor(finalState.betAmount * 2.5); // Blackjack 3:2 öder
-        blackjack = true;
-      }
-    } else if (finalState.gameStatus === 'player-bust' || finalState.gameStatus === 'dealer-win') {
-      balanceChange = 0;
-      win = false;
-    } else if (finalState.gameStatus === 'push') {
-      balanceChange = finalState.betAmount; // Bahis iade edilir
-      win = false;
-    }
-    
-    const newBalance = finalState.balance - finalState.initialBet + balanceChange; // Başlangıç bahsini düşüp sonra kazancı ekle
-    
-    // AuthContext'teki balance'ı güncelle
-    await updateBalance(newBalance);
-    
-    // High Score ve Başarımları güncelle
-    await updateHighScore(newBalance);
-    
-    // GameResult objesi (achievementService için)
-    const gameResult: GameResult = {
-      win,
-      blackjack,
-      doubleDown: isDoubleDown,
-      betAmount: finalState.initialBet, // Başarımlar için başlangıç bahsi
-      previousBalance: finalState.balance,
-      newBalance: newBalance,
-      playerScore: finalState.playerScore,
-      playerCards: finalState.playerCards, 
-      initialBet: finalState.initialBet, 
-    };
-
-    await AchievementService.checkAndUpdateAchievements(user.deviceId, user, gameResult);
-    
-    // GECİKME MANTIK: Kullanıcının sonucu görmesi için 5 saniye bekle
-    await new Promise(resolve => setTimeout(resolve, GAME_END_DELAY));
-
-    // OYUNU SIFIRLAMA: Bahis değerini sıfırla ve oyunu bekleme moduna al.
-    setGameState(prev => ({
-      ...prev,
-      playerCards: [],
-      dealerCards: [],
-      playerScore: 0,
-      dealerScore: 0,
-      gameStatus: 'waiting', // Durumu 'waiting' olarak sıfırla
-      betAmount: INITIAL_BET, // Bahsi başlangıç/minimum değere sıfırla
-      initialBet: INITIAL_BET, // Hata düzeltildi: initialBet sıfırlamaya eklendi
-    }));
-
-  }, [user, updateBalance, updateHighScore]);
-
-  // Krupiye Oynama Mantığı
-  const dealerPlay = useCallback(async (state: GameState, isDoubleDown: boolean) => {
-    let currentState = state;
-    
-    // Krupiyenin ilk kartını aç
-    currentState = updateScoresAndStatus(currentState, true);
-    setGameState(currentState); // UI'ı güncelle
-
-    // Krupiye 17'den az olduğu sürece kart çeker
-    while (currentState.dealerScore < 17 && currentState.gameStatus === 'dealer-turn') {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const { deck: newDeck, card } = drawCard(currentState.deck, 'dealer');
-      
-      currentState = {
-        ...currentState,
-        dealerCards: [...currentState.dealerCards, card],
-        deck: newDeck,
-      };
-      
-      currentState = updateScoresAndStatus(currentState, true);
-      setGameState(currentState);
-      
-      if (currentState.gameStatus !== 'dealer-turn') {
-        break;
-      }
-    }
-    
-    // Oyun bitiş durumunu belirle
-    currentState = updateScoresAndStatus(currentState, true);
-    setGameState(currentState);
-    
-    // handleGameEnd'i çağır
-    if (currentState.gameStatus !== 'player-turn' && currentState.gameStatus !== 'dealer-turn') {
-      handleGameEnd(currentState, isDoubleDown);
-    }
-  }, [drawCard, updateScoresAndStatus, handleGameEnd]);
-
-  // OYUN KONTROL METOTLARI
-  const handleStartGame = () => {
-    if (!user) return;
-
-    // Bahis değerini input'tan al ve kontrol et
-    const currentBet = gameState.betAmount;
-
-    if (currentBet < INITIAL_BET) {
-      Alert.alert('Hata', `Minimum bahis ${INITIAL_BET} Çip olmalıdır.`);
-      return;
-    }
-
-    if (currentBet > user.balance) {
-      Alert.alert('Hata', 'Yetersiz bakiye! Lütfen daha düşük bahis yapın.');
-      return;
-    }
-
-    // Yeni deste hazırla
-    let deck = BlackjackService.initializeDeck();
-    
-    // Kartları dağıt
-    const { deck: deck1, card: pCard1 } = drawCard(deck, 'player');
-    const { deck: deck2, card: dCard1 } = drawCard(deck1, 'dealer');
-    const { deck: deck3, card: pCard2 } = drawCard(deck2, 'player');
-    const { deck: finalDeck, card: dCard2 } = drawCard(deck3, 'dealer');
-
-    const newState: GameState = {
-      playerCards: [pCard1, pCard2],
-      dealerCards: [dCard1, dCard2],
-      gameStatus: 'player-turn',
-      deck: finalDeck,
-      betAmount: currentBet, 
-      balance: user.balance,
-      playerScore: 0,
-      dealerScore: 0,
-      initialBet: currentBet, // initialBet, oyunun başlangıç bahsi
-    };
-    
-    // Skoru ilk kez hesapla ve statüyü belirle
-    const updatedState = updateScoresAndStatus(newState);
-    setGameState(updatedState);
-    
-    // Eğer oyuncu Blackjack yaptıysa, direk krupiye turuna geç
-    if (updatedState.gameStatus !== 'player-turn') {
-      dealerPlay(updatedState, false);
+// ─────────────────────────────────────────────
+// Card Component
+// ─────────────────────────────────────────────
+function CardComponent({ card, isHidden = false }: { card: Card; isHidden?: boolean }) {
+  const getSuitSymbol = (suit: Suit): string => {
+    switch (suit) {
+      case 'hearts':   return '♥';
+      case 'diamonds': return '♦';
+      case 'clubs':    return '♣';
+      case 'spades':   return '♠';
+      default:         return '';
     }
   };
-  
-  const handleHit = () => {
-    if (gameState.gameStatus !== 'player-turn') return;
-    
-    const { deck: newDeck, card } = drawCard(gameState.deck, 'player');
-    
-    const newState: GameState = {
-      ...gameState,
-      playerCards: [...gameState.playerCards, card],
-      deck: newDeck,
-    };
-    
-    const updatedState = updateScoresAndStatus(newState);
-    setGameState(updatedState);
-    
-    // Eğer bust veya 21 olduysa, oyun bitişini kontrol et
-    if (updatedState.gameStatus !== 'player-turn') {
-      if (updatedState.gameStatus === 'player-bust') {
-        handleGameEnd(updatedState, false);
-      } else {
-        dealerPlay(updatedState, false);
-      }
-    }
-  };
-  
-  const handleStand = () => {
-    if (gameState.gameStatus !== 'player-turn') return;
-    
-    setGameState(prev => ({ ...prev, gameStatus: 'dealer-turn' }));
-    dealerPlay({ ...gameState, gameStatus: 'dealer-turn' }, false);
-  };
 
-  const handleDoubleDown = () => {
-    if (gameState.gameStatus !== 'player-turn') return;
+  const getCardColor = (suit: Suit): string =>
+    suit === 'hearts' || suit === 'diamonds' ? '#e74c3c' : '#2c3e50';
 
-    if (gameState.betAmount * 2 > gameState.balance) {
-      Alert.alert('Hata', 'Double Down için yetersiz bakiye.');
-      return;
-    }
-
-    // Bahis miktarını ikiye katla
-    const doubledBetAmount = gameState.betAmount * 2;
-    
-    // Tek bir kart çek
-    const { deck: newDeck, card } = drawCard(gameState.deck, 'player');
-    
-    const newState: GameState = {
-      ...gameState,
-      playerCards: [...gameState.playerCards, card],
-      deck: newDeck,
-      betAmount: doubledBetAmount,
-    };
-
-    // Skoru güncelle ve stand yap
-    const updatedState = updateScoresAndStatus(newState);
-    setGameState(updatedState);
-    
-    // Eğer bust olmadıysa, direk krupiye turuna geç
-    if (updatedState.gameStatus !== 'player-bust') {
-      setGameState(prev => ({ ...prev, gameStatus: 'dealer-turn' }));
-      dealerPlay({ ...updatedState, gameStatus: 'dealer-turn' }, true); 
-    } else {
-      handleGameEnd(updatedState, true);
-    }
-  };
-  
-  // Bahis miktarını TextInput ile doğrudan değiştirme
-  const handleBetInputChange = (text: string) => {
-    if (gameState.gameStatus !== 'waiting') return;
-    
-    let newBet = parseInt(text) || 0;
-    
-    if (newBet < INITIAL_BET) {
-        newBet = INITIAL_BET;
-    } else if (newBet > user!.balance) {
-        newBet = user!.balance;
-    }
-
-    setGameState(prev => ({ ...prev, betAmount: newBet }));
-  };
-
-
-  if (!user) {
+  if (isHidden) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1a1a' }}>
-        <Text style={{ color: '#fff' }}>Yükleniyor...</Text>
+      <View style={cardStyles.card}>
+        <View style={cardStyles.hiddenCard}>
+          <Text style={cardStyles.hiddenCardText}>?</Text>
+        </View>
       </View>
     );
   }
 
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#1c2833', dark: '#1c2833' }}
-      headerImage={
-        <GameHeader 
-          balance={user.balance} 
-          name={user.name} 
-          onExit={handleLogout}
-        />
+    <View style={cardStyles.card}>
+      <Text style={[cardStyles.cardRank, { color: getCardColor(card.suit) }]}>{card.rank}</Text>
+      <Text style={[cardStyles.cardSuit, { color: getCardColor(card.suit) }]}>{getSuitSymbol(card.suit)}</Text>
+    </View>
+  );
+}
+
+const cardStyles = StyleSheet.create({
+  card:           { width: 80, height: 120, backgroundColor: '#fff', borderRadius: 8, padding: 10, justifyContent: 'space-between', alignItems: 'center', borderWidth: 2, borderColor: '#bdc3c7', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 3, marginRight: 8 },
+  hiddenCard:     { flex: 1, backgroundColor: '#3498db', borderRadius: 6, justifyContent: 'center', alignItems: 'center', width: '100%' },
+  hiddenCardText: { color: '#fff', fontSize: 24, fontWeight: 'bold' },
+  cardRank:       { fontSize: 18, fontWeight: 'bold', alignSelf: 'flex-start' },
+  cardSuit:       { fontSize: 24, fontWeight: 'bold' },
+});
+
+// ─────────────────────────────────────────────
+// Initial State Factory
+// ─────────────────────────────────────────────
+const createInitialState = (balance: number, betAmount = 10): GameState => ({
+  playerCards: [],
+  dealerCards: [],
+  playerScore: 0,
+  dealerScore: 0,
+  gameStatus: 'waiting',
+  deck: BlackjackService.initializeDeck(),
+  betAmount,
+  balance,
+  initialBet: betAmount,
+});
+
+// ─────────────────────────────────────────────
+// Solo Oyun Ekranı
+// ─────────────────────────────────────────────
+function SoloGame({ onBackToMenu }: { onBackToMenu: () => void }) {
+  const { user, updateBalance, updateHighScore } = useAuth();
+
+  const [gameState, setGameState] = useState<GameState>(() =>
+    createInitialState(user?.balance ?? 1000)
+  );
+  const [showRules, setShowRules] = useState(false);
+
+  const gameStateRef = useRef(gameState);
+  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+
+  useEffect(() => {
+    if (user) {
+      setGameState(prev =>
+        prev.gameStatus === 'waiting' ? { ...prev, balance: user.balance } : prev
+      );
+    }
+  }, [user?.balance]);
+
+  // ── Geri Dön (Ceza) ──────────────────────────
+  const handleBack = () => {
+    const current = gameStateRef.current;
+    const isInGame = ['player-turn', 'dealer-turn'].includes(current.gameStatus);
+
+    if (isInGame) {
+      Alert.alert(
+        '⚠️ Oyundan Çık',
+        `Oyunu terk ederseniz bahsiniz olan $${current.betAmount} kaybedilecek!\n\nDevam etmek istiyor musunuz?`,
+        [
+          { text: 'Oyunda Kal', style: 'cancel' },
+          {
+            text: 'Çık ve Kaybет',
+            style: 'destructive',
+            onPress: async () => {
+              // Bahsi düş, Firebase güncelle
+              const penaltyBalance = current.balance;
+              await updateBalance(penaltyBalance);
+              onBackToMenu();
+            },
+          },
+        ]
+      );
+    } else {
+      onBackToMenu();
+    }
+  };
+
+  // ── Yardımcı ─────────────────────────────────
+  const getStatusMessage = (): string => {
+    switch (gameState.gameStatus) {
+      case 'waiting':     return 'Oyunu Başlatmak İçin "Yeni El" Butonuna Basın';
+      case 'player-turn': return 'Sıra Sizde: Kart Çek veya Bekle';
+      case 'dealer-turn': return 'Krupiye Oynuyor...';
+      case 'player-bust': return "Bust! 21'i Aştınız";
+      case 'dealer-bust': return 'Krupiye Bust! Kazandınız!';
+      case 'player-win':  return 'Tebrikler! Kazandınız!';
+      case 'dealer-win':  return 'Krupiye Kazandı';
+      case 'push':        return 'Berabere! Paranız İade';
+      default:            return '';
+    }
+  };
+
+  const getStatusColor = (): string => {
+    switch (gameState.gameStatus) {
+      case 'player-win':
+      case 'dealer-bust': return '#27ae60';
+      case 'dealer-win':
+      case 'player-bust': return '#e74c3c';
+      case 'push':        return '#f39c12';
+      default:            return '#3498db';
+    }
+  };
+
+  const changeBet = (amount: number) => {
+    if (gameState.gameStatus !== 'waiting') return;
+    const newBet = gameState.betAmount + amount;
+    if (newBet >= 10 && newBet <= gameState.balance) {
+      setGameState(prev => ({ ...prev, betAmount: newBet }));
+    }
+  };
+
+  const finalizeResult = useCallback((status: GameState['gameStatus'], balanceDelta: number) => {
+    const current = gameStateRef.current;
+    const newBalance = current.balance + balanceDelta;
+    setGameState(prev => ({
+      ...prev,
+      gameStatus: status,
+      balance: newBalance,
+      dealerScore: BlackjackService.calculateScore(prev.dealerCards),
+    }));
+    updateBalance(newBalance);
+    if (balanceDelta > 0) updateHighScore(balanceDelta);
+  }, [updateBalance, updateHighScore]);
+
+  const determineWinner = useCallback(() => {
+    const current = gameStateRef.current;
+    const playerScore = current.playerScore;
+    const dealerScore = BlackjackService.calculateScore(current.dealerCards);
+    if (dealerScore > 21)            finalizeResult('dealer-bust', current.betAmount * 2);
+    else if (playerScore > dealerScore) finalizeResult('player-win', current.betAmount * 2);
+    else if (playerScore < dealerScore) finalizeResult('dealer-win', 0);
+    else                             finalizeResult('push', current.betAmount);
+  }, [finalizeResult]);
+
+  const dealerPlay = useCallback(() => {
+    const runDealerTurn = () => {
+      const current = gameStateRef.current;
+      const dealerScore = BlackjackService.calculateScore(current.dealerCards);
+      if (dealerScore < 17) {
+        setTimeout(() => {
+          const { card, newDeck } = BlackjackService.drawCard(gameStateRef.current.deck);
+          if (!card) { determineWinner(); return; }
+          const newDealerCards = [...gameStateRef.current.dealerCards, card];
+          const newDealerScore = BlackjackService.calculateScore(newDealerCards);
+          setGameState(prev => ({ ...prev, dealerCards: newDealerCards, dealerScore: newDealerScore, deck: newDeck }));
+          if (newDealerScore > 21)      setTimeout(() => finalizeResult('dealer-bust', gameStateRef.current.betAmount * 2), 800);
+          else if (newDealerScore >= 17) setTimeout(determineWinner, 800);
+          else                          runDealerTurn();
+        }, 900);
+      } else {
+        setTimeout(determineWinner, 800);
       }
+    };
+    runDealerTurn();
+  }, [determineWinner, finalizeResult]);
+
+  const checkBlackjack = useCallback((playerCards: Card[], dealerCards: Card[]) => {
+    const playerBJ = BlackjackService.calculateScore(playerCards) === 21 && playerCards.length === 2;
+    const dealerBJ = BlackjackService.calculateScore(dealerCards) === 21 && dealerCards.length === 2;
+    const current = gameStateRef.current;
+    if (playerBJ && dealerBJ) {
+      finalizeResult('push', current.betAmount);
+    } else if (playerBJ) {
+      finalizeResult('player-win', current.betAmount + Math.floor(current.betAmount * 1.5));
+    } else if (dealerBJ) {
+      setGameState(prev => ({ ...prev, gameStatus: 'dealer-win', dealerScore: BlackjackService.calculateScore(dealerCards) }));
+    }
+  }, [finalizeResult]);
+
+  const startGame = useCallback(() => {
+    const current = gameStateRef.current;
+    if (current.balance < current.betAmount) {
+      Alert.alert('Yetersiz Bakiye!', 'Bahis için yeterli bakiyeniz yok.');
+      return;
+    }
+    const balanceAfterBet = current.balance - current.betAmount;
+    let deck = current.deck.length < 20 ? BlackjackService.initializeDeck() : current.deck;
+    const { newDeck: d1, playerCards, dealerCards } = BlackjackService.dealInitialCards(deck);
+    const playerScore = BlackjackService.calculateScore(playerCards);
+    const dealerScore = BlackjackService.calculateScore([dealerCards[0]]);
+    setGameState(prev => ({ ...prev, playerCards, dealerCards, playerScore, dealerScore, gameStatus: 'player-turn', deck: d1, balance: balanceAfterBet, initialBet: prev.betAmount }));
+    updateBalance(balanceAfterBet);
+    if (playerScore === 21 || BlackjackService.calculateScore(dealerCards) === 21) {
+      setTimeout(() => checkBlackjack(playerCards, dealerCards), 300);
+    }
+  }, [updateBalance, checkBlackjack]);
+
+  const hit = useCallback(() => {
+    const current = gameStateRef.current;
+    if (current.gameStatus !== 'player-turn') return;
+    const { card, newDeck } = BlackjackService.drawCard(current.deck);
+    if (!card) return;
+    const newPlayerCards = [...current.playerCards, card];
+    const newPlayerScore = BlackjackService.calculateScore(newPlayerCards);
+    setGameState(prev => ({ ...prev, playerCards: newPlayerCards, playerScore: newPlayerScore, deck: newDeck }));
+    if (newPlayerScore > 21) setTimeout(() => setGameState(prev => ({ ...prev, gameStatus: 'player-bust' })), 400);
+  }, []);
+
+  const stand = useCallback(() => {
+    if (gameStateRef.current.gameStatus !== 'player-turn') return;
+    setGameState(prev => ({ ...prev, gameStatus: 'dealer-turn' }));
+    setTimeout(dealerPlay, 300);
+  }, [dealerPlay]);
+
+  const doubleDown = useCallback(() => {
+    const current = gameStateRef.current;
+    if (current.gameStatus !== 'player-turn' || current.playerCards.length !== 2) return;
+    if (current.balance < current.betAmount) {
+      Alert.alert('Yetersiz Bakiye!', 'Double down için yeterli bakiyeniz yok.');
+      return;
+    }
+    const newBetAmount = current.betAmount * 2;
+    const newBalance   = current.balance - current.betAmount;
+    setGameState(prev => ({ ...prev, betAmount: newBetAmount, balance: newBalance }));
+    updateBalance(newBalance);
+    const { card, newDeck } = BlackjackService.drawCard(current.deck);
+    if (!card) return;
+    const newPlayerCards = [...current.playerCards, card];
+    const newPlayerScore = BlackjackService.calculateScore(newPlayerCards);
+    setGameState(prev => ({ ...prev, playerCards: newPlayerCards, playerScore: newPlayerScore, deck: newDeck }));
+    setTimeout(() => {
+      if (newPlayerScore > 21) setGameState(prev => ({ ...prev, gameStatus: 'player-bust' }));
+      else { setGameState(prev => ({ ...prev, gameStatus: 'dealer-turn' })); setTimeout(dealerPlay, 300); }
+    }, 500);
+  }, [updateBalance, dealerPlay]);
+
+  if (!user) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>Kullanıcı bilgisi yükleniyor...</Text>
+      </View>
+    );
+  }
+
+  const isGameOver = ['player-win','dealer-win','push','player-bust','dealer-bust'].includes(gameState.gameStatus);
+
+  return (
+    <ParallaxScrollView
+      headerBackgroundColor={{ light: '#1a1a1a', dark: '#2d2d2d' }}
+      headerImage={<GameHeader balance={gameState.balance} name={user.name} onBack={handleBack} />}
     >
-      <ThemedView style={styles.container}>
-        <ScrollView style={styles.gameArea}>
-          
-          <GameStatus status={gameState.gameStatus} />
-          
-          {/* Krupiye Alanı */}
-          {gameState.playerCards.length > 0 && <DealerArea gameState={gameState} />}
-          
-          {/* Oyuncu Alanı */}
-          {gameState.playerCards.length > 0 && <PlayerArea gameState={gameState} />}
-          
-          {/* Bahis Girişi Alanı */}
-          {gameState.gameStatus === 'waiting' && (
-             <View style={styles.betInputContainer}>
-                <Text style={styles.betInputLabel}>Bahis Miktarı:</Text>
-                
-                {/* YENİ: Sadece TextInput bırakıldı, butonlar kaldırıldı */}
-                <TextInput
-                    style={styles.betInput}
-                    keyboardType="numeric"
-                    value={String(gameState.betAmount)}
-                    onChangeText={handleBetInputChange}
-                    onBlur={() => handleBetInputChange(String(gameState.betAmount))} // Odak kalkınca temizleme/kontrol
-                    placeholder="Bahis"
-                    placeholderTextColor="#ccc"
-                />
-            </View>
-          )}
+      <ThemedView style={styles.balanceContainer}>
+        <View style={styles.balanceItem}>
+          <Text style={styles.balanceLabel}>Mevcut Bakiye</Text>
+          <Text style={styles.balanceValue}>${gameState.balance}</Text>
+        </View>
+        <View style={styles.balanceItem}>
+          <Text style={styles.balanceLabel}>Bahis</Text>
+          <Text style={styles.balanceValue}>${gameState.betAmount}</Text>
+        </View>
+      </ThemedView>
 
-          {/* Oyun Kontrolleri */}
-          <Controls
-            gameState={gameState}
-            onStartGame={handleStartGame}
-            onHit={handleHit}
-            onStand={handleStand}
-            onDoubleDown={handleDoubleDown}
-            // onChangeBet kaldırıldı çünkü artık TextInput kullanılıyor
-          />
+      <ThemedView style={[styles.statusContainer, { backgroundColor: getStatusColor() + '20' }]}>
+        <Text style={[styles.statusText, { color: getStatusColor() }]}>{getStatusMessage()}</Text>
+      </ThemedView>
 
-          {/* Kurallar Butonu */}
-          <TouchableOpacity style={styles.rulesButton} onPress={() => setShowRulesModal(true)}>
-            <Text style={styles.rulesButtonText}>Blackjack Kuralları</Text>
-          </TouchableOpacity>
-          
-          {/* Kurallar Modalı */}
-          <Modal
-            animationType="fade"
-            transparent={true}
-            visible={showRulesModal}
-            onRequestClose={() => setShowRulesModal(false)}
-          >
-            <View style={styles.modalContainer}>
-              <ThemedView style={styles.modalContent}>
-                <ThemedText type="title" style={styles.modalTitle}>Blackjack Kuralları</ThemedText>
-                <ScrollView style={{ maxHeight: 400, marginVertical: 15 }}>
-                  <Text style={styles.rulesText}>
-                    - Amaç, 21'i geçmeden krupiyeden daha yüksek bir puana ulaşmaktır.
-                  </Text>
-                  <Text style={styles.rulesText}>
-                    - Kart değerleri: 2-10 normal değerinde, Vale, Kız, Papaz 10, As 1 veya 11 değerindedir.
-                  </Text>
-                  <Text style={styles.rulesText}>
-                    - **Blackjack (21)**: İlk iki kartınızla 21 yapmaktır. Genellikle 3'e 2 öder.
-                  </Text>
-                  <Text style={styles.rulesText}>
-                    - **Hit (Kart Çek)**: Yeni bir kart istemek.
-                  </Text>
-                  <Text style={styles.rulesText}>
-                    - **Stand (Bekle)**: Mevcut kartlarınızla kalmak ve sırayı krupiyeye vermek.
-                  </Text>
-                  <Text style={styles.rulesText}>
-                    - **Double Down (İkiye Katla)**: Bahsi ikiye katlamak ve sadece tek bir kart daha çekmek.
-                  </Text>
-                  <Text style={styles.rulesText}>
-                    - **Krupiye Kuralı**: Krupiye 16 veya altında kart çekmeye devam eder ve 17 veya üstünde durur.
-                  </Text>
-                  <Text style={styles.rulesText}>
-                    - **Bust**: 21'i geçmek, otomatik kayıp demektir.
-                  </Text>
-                </ScrollView>
-                <TouchableOpacity 
-                  style={[styles.controlButton, styles.primaryButton]} 
-                  onPress={() => setShowRulesModal(false)}
-                >
-                  <Text style={styles.controlButtonText}>Kapat</Text>
-                </TouchableOpacity>
-              </ThemedView>
-            </View>
-          </Modal>
-
+      <ThemedView style={styles.section}>
+        <ThemedText type="subtitle">
+          Krupiye: {gameState.dealerCards.length === 0
+            ? 0
+            : gameState.gameStatus === 'player-turn'
+              ? BlackjackService.calculateScore([gameState.dealerCards[0]])
+              : BlackjackService.calculateScore(gameState.dealerCards)}
+        </ThemedText>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cardsContainer}>
+          {gameState.dealerCards.map((card, index) => (
+            <CardComponent key={card.id} card={card} isHidden={index === 1 && gameState.gameStatus === 'player-turn'} />
+          ))}
         </ScrollView>
       </ThemedView>
+
+      <ThemedView style={styles.section}>
+        <ThemedText type="subtitle">Siz: {gameState.playerScore}</ThemedText>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cardsContainer}>
+          {gameState.playerCards.map(card => <CardComponent key={card.id} card={card} />)}
+        </ScrollView>
+      </ThemedView>
+
+      <ThemedView style={styles.controlsContainer}>
+        {gameState.gameStatus === 'waiting' && (
+          <View>
+            <View style={styles.betControls}>
+              {[-50, -10, 10, 50].map(amount => (
+                <TouchableOpacity
+                  key={amount}
+                  style={[styles.betButton, ((amount < 0 && gameState.betAmount + amount < 10) || (amount > 0 && gameState.betAmount + amount > gameState.balance)) && styles.disabledButton]}
+                  onPress={() => changeBet(amount)}
+                  disabled={(amount < 0 && gameState.betAmount + amount < 10) || (amount > 0 && gameState.betAmount + amount > gameState.balance)}
+                >
+                  <Text style={styles.betButtonText}>{amount > 0 ? `+${amount}` : amount}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity style={[styles.controlButton, styles.primaryButton]} onPress={startGame}>
+              <Text style={styles.controlButtonText}>🎲 Yeni El (${gameState.betAmount})</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {gameState.gameStatus === 'player-turn' && (
+          <View style={styles.gameControls}>
+            <TouchableOpacity style={[styles.controlButton, styles.successButton]} onPress={hit}>
+              <Text style={styles.controlButtonText}>✅ Hit (Kart Çek)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.controlButton, styles.warningButton]} onPress={stand}>
+              <Text style={styles.controlButtonText}>✋ Stand (Bekle)</Text>
+            </TouchableOpacity>
+            {gameState.playerCards.length === 2 && (
+              <TouchableOpacity
+                style={[styles.controlButton, styles.infoButton, gameState.balance < gameState.betAmount && styles.disabledButton]}
+                onPress={doubleDown}
+                disabled={gameState.balance < gameState.betAmount}
+              >
+                <Text style={styles.controlButtonText}>⚡ Double Down</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {isGameOver && (
+          <TouchableOpacity style={[styles.controlButton, styles.primaryButton]} onPress={startGame}>
+            <Text style={styles.controlButtonText}>🔄 Yeni El</Text>
+          </TouchableOpacity>
+        )}
+      </ThemedView>
+
+      <TouchableOpacity style={styles.rulesButton} onPress={() => setShowRules(true)}>
+        <Text style={styles.rulesButtonText}>📖 Blackjack Kuralları</Text>
+      </TouchableOpacity>
+
+      <Modal visible={showRules} animationType="slide" transparent>
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Blackjack Kuralları</Text>
+            <ScrollView style={styles.rulesList}>
+              {[
+                "🎯 Amaç: 21'e en yakın sayıyı yapmak",
+                '🃏 As: 1 veya 11 değerinde',
+                '👑 J, Q, K: 10 değerinde',
+                '✅ Hit: Ek kart çekmek',
+                '✋ Stand: Kart çekmemek',
+                '⚡ Double Down: Bahsi 2x yapıp 1 kart çekmek',
+                "💥 Bust: 21'i aşmak (kaybetmek)",
+                '🎲 Blackjack: İlk 2 kartla 21 yapmak (3:2 öder)',
+                "🤵 Krupiye: 17'ye kadar çeker, 17+ durur",
+              ].map((rule, i) => <Text key={i} style={styles.ruleItem}>{rule}</Text>)}
+            </ScrollView>
+            <TouchableOpacity style={styles.closeButton} onPress={() => setShowRules(false)}>
+              <Text style={styles.closeButtonText}>Kapat</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ParallaxScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#1a1a1a',
-  },
-  gameArea: {
-    flex: 1,
-    paddingTop: 20,
-  },
-  // Bahis Giriş Alanı
-  betInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    marginBottom: 20,
-    backgroundColor: '#34495e',
-    borderRadius: 10,
-    marginHorizontal: 16,
-  },
-  betInputLabel: {
-    color: '#ecf0f1',
-    fontSize: 16,
-    marginRight: 10,
-    fontWeight: 'bold',
-  },
-  betInput: {
-    flex: 1,
-    height: 40,
-    backgroundColor: '#fff',
-    borderColor: '#3498db',
-    borderWidth: 2,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    fontSize: 16,
-    textAlign: 'center',
-    minWidth: 80,
-    color: '#000',
-    marginHorizontal: 5,
-  },
-  // KULLANIM DIŞI: betButton stilleri kaldırıldı
-  controlButton: {
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginBottom: 10,
-    marginHorizontal: 16,
-  },
-  primaryButton: {
-    backgroundColor: '#3498db',
-  },
-  successButton: {
-    backgroundColor: '#2ecc71',
-  },
-  warningButton: {
-    backgroundColor: '#f39c12',
-  },
-  infoButton: {
-    backgroundColor: '#9b59b6',
-  },
-  controlButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  rulesButton: {
-    backgroundColor: '#95a5a6',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginHorizontal: 16,
-    marginBottom: 20,
-  },
-  rulesButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-  },
-  modalContent: {
-    backgroundColor: '#2c3e50',
-    borderRadius: 12,
-    padding: 20,
-    margin: 20,
-    maxHeight: '80%',
-    minWidth: '80%',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    color: '#fff',
-    marginBottom: 10,
-  },
-  rulesText: {
-    color: '#ecf0f1',
-    fontSize: 14,
-    marginBottom: 8,
-    lineHeight: 20,
+// ─────────────────────────────────────────────
+// Ana Export — Menü + Ekran Yönetimi
+// ─────────────────────────────────────────────
+export default function PlayScreen() {
+  const { user } = useAuth();
+  const [screen, setScreen] = useState<AppScreen>('menu');
+
+  if (!user) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>Kullanıcı bilgisi yükleniyor...</Text>
+      </View>
+    );
   }
+
+  if (screen === 'solo') {
+    return <SoloGame onBackToMenu={() => setScreen('menu')} />;
+  }
+
+  if (screen === 'multi') {
+    return <MultiplayerScreen onBackToMenu={() => setScreen('menu')} />;
+  }
+
+  return <MainMenu user={user} onSelect={setScreen} />;
+}
+
+const styles = StyleSheet.create({
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1a1a' },
+  loadingText:      { color: '#fff', fontSize: 18 },
+  balanceContainer: { flexDirection: 'row', justifyContent: 'space-around', padding: 16, marginHorizontal: 16, marginBottom: 16, borderRadius: 12, backgroundColor: '#ecf0f1' },
+  balanceItem:      { alignItems: 'center' },
+  balanceLabel:     { fontSize: 14, color: '#7f8c8d', marginBottom: 4 },
+  balanceValue:     { fontSize: 24, fontWeight: 'bold', color: '#2c3e50' },
+  statusContainer:  { padding: 16, marginHorizontal: 16, marginBottom: 20, borderRadius: 12, alignItems: 'center' },
+  statusText:       { fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  section:          { marginBottom: 25, paddingHorizontal: 16 },
+  cardsContainer:   { flexDirection: 'row', marginTop: 10 },
+  controlsContainer:{ paddingHorizontal: 16, marginBottom: 20 },
+  betControls:      { flexDirection: 'row', gap: 8, marginBottom: 15, justifyContent: 'center' },
+  betButton:        { backgroundColor: '#3498db', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
+  betButtonText:    { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+  disabledButton:   { backgroundColor: '#bdc3c7' },
+  gameControls:     { gap: 10 },
+  controlButton:    { paddingVertical: 15, paddingHorizontal: 20, borderRadius: 12, alignItems: 'center' },
+  primaryButton:    { backgroundColor: '#3498db' },
+  successButton:    { backgroundColor: '#27ae60' },
+  warningButton:    { backgroundColor: '#f39c12' },
+  infoButton:       { backgroundColor: '#9b59b6' },
+  controlButtonText:{ color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  rulesButton:      { backgroundColor: '#95a5a6', padding: 12, borderRadius: 8, alignItems: 'center', marginHorizontal: 16, marginBottom: 20 },
+  rulesButtonText:  { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  modalContainer:   { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
+  modalContent:     { backgroundColor: '#fff', borderRadius: 12, padding: 20, margin: 20, maxHeight: '80%', minWidth: '80%' },
+  modalTitle:       { fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 15, color: '#2c3e50' },
+  rulesList:        { maxHeight: 400 },
+  ruleItem:         { fontSize: 16, paddingVertical: 8, color: '#34495e', borderBottomWidth: 1, borderBottomColor: '#ecf0f1' },
+  closeButton:      { backgroundColor: '#e74c3c', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 15 },
+  closeButtonText:  { color: '#fff', fontSize: 16, fontWeight: 'bold' },
 });
