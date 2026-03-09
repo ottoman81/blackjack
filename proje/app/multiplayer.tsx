@@ -1,14 +1,22 @@
 // app/multiplayer.tsx
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, TouchableOpacity, TextInput,
-  ScrollView, Alert, Share, ActivityIndicator, Modal
-} from 'react-native';
 import { useAuth } from '@/context/AuthContext';
-import { MultiplayerService } from '@/services/multiplayerService';
 import { BlackjackService } from '@/services/blackjackService';
-import { MultiplayerRoom, MultiplayerMode, MultiplayerPlayer } from '@/types/multiplayer';
+import { MultiplayerService } from '@/services/multiplayerService';
 import { Card, Suit } from '@/types/blackjack';
+import { MultiplayerMode, MultiplayerPlayer, MultiplayerRoom } from '@/types/multiplayer';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from 'react-native';
 
 // ─────────────────────────────────────────────
 // Kart Bileşeni
@@ -102,6 +110,15 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
       setRoom(updatedRoom);
       if (updatedRoom.status === 'playing' && screen === 'lobby') setScreen('game');
       if (updatedRoom.status === 'finished') setScreen('result');
+
+      // Tüm oyuncular stand/bust olduysa finishGame tetikle (nextTurn race condition fix)
+      if (updatedRoom.status === 'playing' && updatedRoom.mode === '1v1') {
+        const players = Object.values(updatedRoom.players) as import('@/types/multiplayer').MultiplayerPlayer[];
+        const allDone = players.every(p => p.status === 'stand' || p.status === 'bust' || p.status === 'blackjack');
+        if (allDone) {
+          MultiplayerService.finishGame(updatedRoom);
+        }
+      }
     });
     return () => unsub();
   }, [room?.roomId]);

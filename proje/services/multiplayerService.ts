@@ -189,9 +189,13 @@ export class MultiplayerService {
 
   // ── Bekle (Stand) ────────────────────────────
   static async stand(room: MultiplayerRoom, userId: string): Promise<void> {
+    // Önce status güncelle
     await updateDoc(doc(db, ROOMS_COLLECTION, room.roomId), {
       [`players.${userId}.status`]: 'stand',
     });
+
+    // Firestore'un yazmayı yayması için kısa bekle
+    await new Promise(r => setTimeout(r, 500));
 
     if (room.mode === '1v1') {
       await this.nextTurn(room, userId);
@@ -203,15 +207,19 @@ export class MultiplayerService {
 
   // ── Sıra Geçiş (1v1) ─────────────────────────
   static async nextTurn(room: MultiplayerRoom, currentUserId: string): Promise<void> {
-    const playerIds = Object.keys(room.players);
+    // Güncel room'u Firestore'dan çek (stale data sorunundan kaçın)
+    const roomSnap = await getDoc(doc(db, ROOMS_COLLECTION, room.roomId));
+    const updatedRoom = roomSnap.data() as MultiplayerRoom;
+
+    const playerIds = Object.keys(updatedRoom.players);
     const currentIndex = playerIds.indexOf(currentUserId);
     const nextIndex = (currentIndex + 1) % playerIds.length;
     const nextId = playerIds[nextIndex];
-    const nextPlayer = room.players[nextId];
+    const nextPlayer = updatedRoom.players[nextId];
 
     // Eğer sonraki oyuncu zaten bitmişse oyunu sonlandır
     if (nextPlayer.status === 'stand' || nextPlayer.status === 'bust') {
-      await this.finishGame(room);
+      await this.finishGame(updatedRoom);
     } else {
       await updateDoc(doc(db, ROOMS_COLLECTION, room.roomId), {
         currentTurn: nextId,
