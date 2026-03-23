@@ -1,4 +1,3 @@
-// app/multiplayer.tsx
 import { useAuth } from '@/context/AuthContext';
 import { BlackjackService } from '@/services/blackjackService';
 import { MultiplayerService } from '@/services/multiplayerService';
@@ -39,6 +38,7 @@ function CardComp({ card, isHidden = false }: { card: Card; isHidden?: boolean }
     </View>
   );
 }
+
 const cStyles = StyleSheet.create({
   card:      { width:70, height:105, backgroundColor:'#fff', borderRadius:8, padding:8, justifyContent:'space-between', alignItems:'center', borderWidth:1.5, borderColor:'#ddd', marginRight:6, elevation:3 },
   hidden:    { flex:1, backgroundColor:'#3498db', borderRadius:6, width:'100%', justifyContent:'center', alignItems:'center' },
@@ -50,10 +50,11 @@ const cStyles = StyleSheet.create({
 // ─────────────────────────────────────────────
 // Oyuncu Kartları Paneli
 // ─────────────────────────────────────────────
-function PlayerPanel({ player, isCurrentTurn, isMe }: {
+function PlayerPanel({ player, isCurrentTurn, isMe, revealed }: {
   player: MultiplayerPlayer;
   isCurrentTurn: boolean;
   isMe: boolean;
+  revealed: boolean;
 }) {
   const statusColor = () => {
     if (player.status === 'bust')      return '#e74c3c';
@@ -66,17 +67,27 @@ function PlayerPanel({ player, isCurrentTurn, isMe }: {
     <View style={[pStyles.container, isCurrentTurn && pStyles.activeTurn]}>
       <View style={pStyles.header}>
         <Text style={pStyles.name}>{player.name} {isMe ? '(Sen)' : ''}</Text>
-        <View style={[pStyles.statusBadge, { backgroundColor: statusColor() }]}>
-          <Text style={pStyles.statusText}>{player.status.toUpperCase()}</Text>
-        </View>
+        {(isMe || revealed) && (
+          <View style={[pStyles.statusBadge, { backgroundColor: statusColor() }]}>
+            <Text style={pStyles.statusText}>{player.status.toUpperCase()}</Text>
+          </View>
+        )}
       </View>
-      <Text style={pStyles.score}>Skor: {player.score}</Text>
+      {(isMe || revealed) && (
+        <Text style={pStyles.score}>Skor: {player.score}</Text>
+      )}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={pStyles.cards}>
-        {player.cards.map(c => <CardComp key={c.id} card={c} />)}
+        {player.cards.map((c, i) => (
+          <CardComp key={c.id} card={c} isHidden={!isMe && !revealed} />
+        ))}
       </ScrollView>
+      {!isMe && !revealed && player.cards.length > 0 && (
+        <Text style={pStyles.hiddenHint}>🂠 Kartlar gizli</Text>
+      )}
     </View>
   );
 }
+
 const pStyles = StyleSheet.create({
   container:   { backgroundColor:'#1e2a3a', borderRadius:12, padding:14, marginBottom:12, borderWidth:2, borderColor:'transparent' },
   activeTurn:  { borderColor:'#f39c12' },
@@ -85,6 +96,7 @@ const pStyles = StyleSheet.create({
   statusBadge: { paddingHorizontal:10, paddingVertical:3, borderRadius:12 },
   statusText:  { color:'#fff', fontSize:11, fontWeight:'bold' },
   score:       { color:'#3498db', fontSize:14, marginBottom:8 },
+  hiddenHint:  { color:'#8b949e', fontSize:11, marginTop:4, fontStyle:'italic' },
   cards:       { flexDirection:'row' },
 });
 
@@ -102,30 +114,53 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
   const [betAmount, setBetAmount] = useState(10);
   const [loading, setLoading]   = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
+  const [revealedPlayers, setRevealedPlayers] = useState<Set<string>>(new Set());
+  const [countdown, setCountdown]   = useState<number | null>(null);
+  const [showResult, setShowResult] = useState(false);
 
-  // Oda değişikliklerini dinle
+  // ── Oda değişikliklerini dinle ────────────────
   useEffect(() => {
     if (!room) return;
     const unsub = MultiplayerService.listenRoom(room.roomId, updatedRoom => {
       setRoom(updatedRoom);
       if (updatedRoom.status === 'playing' && screen === 'lobby') setScreen('game');
-      if (updatedRoom.status === 'finished') setScreen('result');
-
-      // Tüm oyuncular stand/bust olduysa finishGame tetikle (nextTurn race condition fix)
-      if (updatedRoom.status === 'playing' && updatedRoom.mode === '1v1') {
-        const players = Object.values(updatedRoom.players) as import('@/types/multiplayer').MultiplayerPlayer[];
-        const allDone = players.every(p => p.status === 'stand' || p.status === 'bust' || p.status === 'blackjack');
-        if (allDone) {
-          MultiplayerService.finishGame(updatedRoom);
-        }
+      if (updatedRoom.status === 'finished' && !showResult) {
+        setScreen('result');
+        setCountdown(20);
       }
     });
     return () => unsub();
-  }, [room?.roomId]);
+  }, [room?.roomId, screen, showResult]);
+
+  // ── Geri sayım ────────────────────────────────
+  useEffect(() => {
+    if (countdown === null) return;
+    if (countdown <= 0) { setShowResult(true); return; }
+    const t = setTimeout(() => setCountdown(c => (c ?? 1) - 1), 1000);
+    return () => clearTimeout(t);
+  }, [countdown]);
+
+  // ── Oyun bitince bakiye güncelle ──────────────
+  useEffect(() => {
+    if (room?.status !== 'finished' || !user) return;
+    
+    const myFinalPlayer = room.players[user.deviceId];
+    if (myFinalPlayer) {
+      console.log('Bakiye güncelleniyor:', myFinalPlayer.balance);
+      updateBalance(myFinalPlayer.balance);
+    }
+  }, [room?.status, room?.winner, user?.deviceId]);
 
   // ── Oda Oluştur ─────────────────────────────
   const createRoom = async (selectedMode: MultiplayerMode) => {
     if (!user) return;
+    
+    // Bahis kontrolü
+    if (user.balance < betAmount) {
+      Alert.alert('Hata', 'Yeterli bakiye yok!');
+      return;
+    }
+    
     setLoading(true);
     try {
       const newRoom = await MultiplayerService.createRoom(
@@ -133,6 +168,8 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
       );
       setMode(selectedMode);
       setRoom(newRoom);
+      // Bakiyeyi hemen güncelle
+      updateBalance(user.balance - betAmount);
       setScreen('lobby');
     } catch (e) {
       Alert.alert('Hata', 'Oda oluşturulamadı.');
@@ -147,6 +184,13 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
       Alert.alert('Hata', '4 haneli oda kodunu gir.');
       return;
     }
+    
+    // Bahis kontrolü
+    if (user.balance < betAmount) {
+      Alert.alert('Hata', 'Yeterli bakiye yok!');
+      return;
+    }
+    
     setLoading(true);
     try {
       const joined = await MultiplayerService.joinByCode(
@@ -158,8 +202,11 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
       }
       setRoom(joined);
       setMode(joined.mode);
+      // Bakiyeyi güncelle (bahis zaten düşülmüş)
+      updateBalance(user.balance - betAmount);
       setScreen('lobby');
       setShowJoinModal(false);
+      setJoinCode('');
     } catch (e) {
       Alert.alert('Hata', 'Odaya katılınamadı.');
     } finally {
@@ -219,6 +266,10 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
     if (!room || !user) return;
     await MultiplayerService.leaveRoom(room.roomId, user.deviceId);
     setRoom(null);
+    setScreen('modeSelect');
+    setRevealedPlayers(new Set());
+    setCountdown(null);
+    setShowResult(false);
     onBackToMenu();
   };
 
@@ -233,6 +284,11 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
         <Text style={s.title}>♠️ Multiplayer ♥️</Text>
         <Text style={s.subtitle}>Mod Seç</Text>
 
+        {/* Bakiye Gösterimi */}
+        <View style={s.balanceBox}>
+          <Text style={s.balanceTxt}>💰 Bakiye: ${user.balance}</Text>
+        </View>
+
         {/* Bahis */}
         <View style={s.betRow}>
           <Text style={s.label}>Bahis: ${betAmount}</Text>
@@ -242,6 +298,7 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
                 key={v}
                 style={[s.betBtn, betAmount + v < 10 || betAmount + v > user.balance ? s.disabled : null]}
                 onPress={() => setBetAmount(prev => Math.max(10, Math.min(user.balance, prev + v)))}
+                disabled={betAmount + v < 10 || betAmount + v > user.balance}
               >
                 <Text style={s.betBtnTxt}>{v > 0 ? `+${v}` : v}</Text>
               </TouchableOpacity>
@@ -259,6 +316,7 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
             key={item.mode}
             style={s.modeCard}
             onPress={() => createRoom(item.mode)}
+            disabled={user.balance < betAmount}
           >
             <Text style={s.modeIcon}>{item.icon}</Text>
             <View style={s.modeText}>
@@ -270,7 +328,11 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
         ))}
 
         {/* Koda Katıl */}
-        <TouchableOpacity style={[s.modeCard, { borderColor: '#3498db' }]} onPress={() => setShowJoinModal(true)}>
+        <TouchableOpacity 
+          style={[s.modeCard, { borderColor: '#3498db' }]} 
+          onPress={() => setShowJoinModal(true)}
+          disabled={user.balance < betAmount}
+        >
           <Text style={s.modeIcon}>🔑</Text>
           <View style={s.modeText}>
             <Text style={s.modeTitle}>Koda Katıl</Text>
@@ -292,11 +354,16 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
                 placeholderTextColor="#888"
                 keyboardType="numeric"
                 maxLength={4}
+                editable={!loading}
               />
-              <TouchableOpacity style={s.joinBtn} onPress={joinRoom}>
+              <TouchableOpacity 
+                style={[s.joinBtn, !joinCode || loading ? s.disabled : null]} 
+                onPress={joinRoom}
+                disabled={!joinCode || loading}
+              >
                 {loading ? <ActivityIndicator color="#fff" /> : <Text style={s.joinBtnTxt}>Katıl</Text>}
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setShowJoinModal(false)}>
+              <TouchableOpacity onPress={() => { setShowJoinModal(false); setJoinCode(''); }} disabled={loading}>
                 <Text style={s.cancelTxt}>İptal</Text>
               </TouchableOpacity>
             </View>
@@ -332,7 +399,10 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
         <Text style={s.sectionTitle}>Oyuncular ({players.length}/{room.maxPlayers})</Text>
         {players.map(p => (
           <View key={p.userId} style={s.playerRow}>
-            <Text style={s.playerName}>{p.name} {p.userId === user.deviceId ? '(Sen)' : ''}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.playerName}>{p.name} {p.userId === user.deviceId ? '(Sen)' : ''}</Text>
+              <Text style={s.playerBet}>Bahis: ${p.betAmount}</Text>
+            </View>
             <View style={[s.readyBadge, { backgroundColor: p.isReady ? '#27ae60' : '#e74c3c' }]}>
               <Text style={s.readyTxt}>{p.isReady ? 'Hazır' : 'Bekliyor'}</Text>
             </View>
@@ -346,7 +416,7 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
             </TouchableOpacity>
           )}
           {isHost && (
-            <TouchableOpacity style={s.startBtn} onPress={startGame}>
+            <TouchableOpacity style={[s.startBtn, loading ? s.disabled : null]} onPress={startGame} disabled={loading}>
               {loading
                 ? <ActivityIndicator color="#fff" />
                 : <Text style={s.startBtnTxt}>🎲 Oyunu Başlat</Text>
@@ -367,8 +437,7 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
   if (screen === 'game' && room) {
     const players = Object.values(room.players);
     const myPlayer = room.players[user.deviceId];
-    const isMyTurn = room.currentTurn === user.deviceId || room.mode === '2v-dealer';
-    const canAct = isMyTurn && myPlayer?.status === 'playing';
+    const canAct = myPlayer?.status === 'playing';
 
     return (
       <ScrollView style={s.bg} contentContainerStyle={{ padding: 16 }}>
@@ -394,22 +463,28 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
 
         {/* Oyuncular */}
         {players.map(p => (
-          <PlayerPanel
-            key={p.userId}
-            player={p}
-            isCurrentTurn={room.currentTurn === p.userId}
-            isMe={p.userId === user.deviceId}
-          />
+          <View key={p.userId}>
+            <PlayerPanel
+              player={p}
+              isCurrentTurn={room.currentTurn === p.userId}
+              isMe={p.userId === user.deviceId}
+              revealed={revealedPlayers.has(p.userId)}
+            />
+          </View>
         ))}
 
-        {/* 1v1: Sıra göstergesi */}
-        {room.mode === '1v1' && (
-          <View style={s.turnIndicator}>
-            <Text style={s.turnTxt}>
-              {isMyTurn ? '🟢 Senin Sıran' : '⏳ Rakip Oynuyor'}
-            </Text>
-          </View>
-        )}
+        {/* Rakip durumu — bust/stand farkı gizli */}
+        {(room.mode === '1v1' || room.mode === 'room') && (() => {
+          const opponent = players.find(p => p.userId !== user.deviceId);
+          const opponentDone = opponent && (opponent.status === 'stand' || opponent.status === 'bust' || opponent.status === 'blackjack');
+          return (
+            <View style={[s.turnIndicator, opponentDone ? { backgroundColor: '#1a3a2a' } : {}]}>
+              <Text style={s.turnTxt}>
+                {opponentDone ? '✅ Rakip kararını verdi' : '⏳ Rakip oynuyor...'}
+              </Text>
+            </View>
+          );
+        })()}
 
         {/* Aksiyon Butonları */}
         {canAct && (
@@ -423,9 +498,14 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
           </View>
         )}
 
-        {!canAct && myPlayer?.status === 'playing' && (
+        {!canAct && myPlayer && (
           <View style={s.waitBox}>
-            <Text style={s.waitTxt}>⏳ Rakip oynuyor...</Text>
+            <Text style={s.waitTxt}>
+              {myPlayer.status === 'bust' ? '💥 Bust oldun!' : 
+               myPlayer.status === 'stand' ? '✋ Stand durumundasın' : 
+               myPlayer.status === 'blackjack' ? '⭐ Blackjack!' : 
+               'Bekliyorsun...'}
+            </Text>
           </View>
         )}
       </ScrollView>
@@ -437,24 +517,60 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
   // ─────────────────────────────────────────────
   if (screen === 'result' && room) {
     const players = Object.values(room.players);
-    const winner = room.winner;
+    const winner  = room.winner;
+    const myFinalBalance = room.players[user.deviceId]?.balance ?? user.balance;
     const isWinner = winner === user.deviceId;
-    const isDraw = winner === 'draw';
+    const isDraw   = winner === 'draw';
+    const isDealer = winner === null; // Krupiye kazandı (2v-dealer modunda)
 
+    // ── Geri sayım ekranı ──────────────────────
+    if (!showResult && countdown !== null) {
+      return (
+        <View style={[s.bg, s.center]}>
+          <Text style={s.countdownTitle}>Sonuç açıklanıyor...</Text>
+          <Text style={s.countdownNum}>{countdown}</Text>
+          <TouchableOpacity style={s.skipBtn} onPress={() => setShowResult(true)}>
+            <Text style={s.skipBtnTxt}>Geç ›</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    // ── Sonuç ekranı ───────────────────────────
     return (
       <ScrollView style={s.bg} contentContainerStyle={s.center}>
         <Text style={s.resultEmoji}>
-          {isDraw ? '🤝' : isWinner ? '🏆' : '😔'}
+          {isDraw ? '🤝' : isDealer ? '🤵' : isWinner ? '🏆' : '😔'}
         </Text>
         <Text style={s.resultTitle}>
-          {isDraw ? 'Berabere!' : isWinner ? 'Kazandın!' : 'Kaybettin!'}
+          {isDraw ? 'Berabere!' : isDealer ? 'Krupiye Kazandı!' : isWinner ? 'Kazandın!' : 'Kaybettin!'}
         </Text>
 
+        {/* Bakiye Değişimi Gösterimi */}
+        <View style={s.resultBalanceChange}>
+          <Text style={[s.resultBalanceChangeText, myFinalBalance >= user.balance ? { color: '#27ae60' } : { color: '#e74c3c' }]}>
+            {myFinalBalance >= user.balance ? '+' : ''}{myFinalBalance - user.balance}
+          </Text>
+        </View>
+
+        {/* Kartlar sonuçta açık gösterilir */}
         {players.map(p => (
           <View key={p.userId} style={s.resultRow}>
-            <Text style={s.resultName}>{p.name}</Text>
+            <Text style={s.resultName}>{p.name} {p.userId === user.deviceId ? '(Sen)' : ''}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', marginVertical: 6 }}>
+              {p.cards.map(c => {
+                const isRed = c.suit === 'hearts' || c.suit === 'diamonds';
+                const sym = { hearts:'♥', diamonds:'♦', clubs:'♣', spades:'♠' }[c.suit] ?? '';
+                return (
+                  <View key={c.id} style={cStyles.card}>
+                    <Text style={[cStyles.rank, { color: isRed ? '#e74c3c' : '#1a1a2e' }]}>{c.rank}</Text>
+                    <Text style={[cStyles.suit, { color: isRed ? '#e74c3c' : '#1a1a2e' }]}>{sym}</Text>
+                  </View>
+                );
+              })}
+            </ScrollView>
             <Text style={s.resultScore}>Skor: {p.score}</Text>
-            <Text style={s.resultBalance}>Bakiye: ${p.balance}</Text>
+            <Text style={s.resultBalance}>Son Bakiye: ${p.balance}</Text>
           </View>
         ))}
 
@@ -466,11 +582,30 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
           </View>
         )}
 
-        <TouchableOpacity
-          style={s.playAgainBtn}
-          onPress={() => { setRoom(null); onBackToMenu(); }}
+        <TouchableOpacity 
+          style={s.playAgainBtn} 
+          onPress={() => { 
+            setRoom(null); 
+            setShowResult(false); 
+            setCountdown(null); 
+            setRevealedPlayers(new Set());
+            setScreen('modeSelect');
+          }}
         >
           <Text style={s.playAgainTxt}>🔄 Tekrar Oyna</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[s.playAgainBtn, { backgroundColor: '#444', marginTop: 10 }]} 
+          onPress={() => { 
+            setRoom(null); 
+            setShowResult(false); 
+            setCountdown(null); 
+            setRevealedPlayers(new Set());
+            setScreen('modeSelect');
+            onBackToMenu(); 
+          }}
+        >
+          <Text style={s.playAgainTxt}>🏠 Menüye Dön</Text>
         </TouchableOpacity>
       </ScrollView>
     );
@@ -483,64 +618,75 @@ export default function MultiplayerScreen({ onBackToMenu }: { onBackToMenu: () =
 // Stiller
 // ─────────────────────────────────────────────
 const s = StyleSheet.create({
-  bg:           { flex:1, backgroundColor:'#0d1117' },
-  center:       { alignItems:'center', padding:20 },
-  title:        { color:'#fff', fontSize:26, fontWeight:'bold', marginBottom:6 },
-  subtitle:     { color:'#8b949e', fontSize:16, marginBottom:20 },
-  label:        { color:'#ecf0f1', fontSize:15, marginBottom:8 },
-  betRow:       { width:'100%', marginBottom:20 },
-  betBtns:      { flexDirection:'row', gap:8 },
-  betBtn:       { backgroundColor:'#238636', paddingHorizontal:14, paddingVertical:8, borderRadius:8 },
-  betBtnTxt:    { color:'#fff', fontWeight:'bold' },
-  disabled:     { backgroundColor:'#3d444d' },
-  modeCard:     { width:'100%', flexDirection:'row', alignItems:'center', backgroundColor:'#161b22', borderRadius:12, padding:16, marginBottom:12, borderWidth:1, borderColor:'#30363d' },
-  modeIcon:     { fontSize:28, marginRight:14 },
-  modeText:     { flex:1 },
-  modeTitle:    { color:'#fff', fontSize:16, fontWeight:'bold' },
-  modeDesc:     { color:'#8b949e', fontSize:13, marginTop:2 },
-  arrow:        { color:'#8b949e', fontSize:22 },
-  modalBg:      { flex:1, backgroundColor:'rgba(0,0,0,0.7)', justifyContent:'center', alignItems:'center' },
-  modalBox:     { backgroundColor:'#161b22', borderRadius:16, padding:24, width:'80%', alignItems:'center' },
-  modalTitle:   { color:'#fff', fontSize:18, fontWeight:'bold', marginBottom:16 },
-  codeInput:    { backgroundColor:'#0d1117', color:'#fff', fontSize:32, textAlign:'center', borderRadius:10, padding:14, width:'100%', marginBottom:16, letterSpacing:12, borderWidth:1, borderColor:'#30363d' },
-  joinBtn:      { backgroundColor:'#238636', paddingVertical:12, paddingHorizontal:30, borderRadius:10, marginBottom:10 },
-  joinBtnTxt:   { color:'#fff', fontSize:16, fontWeight:'bold' },
-  cancelTxt:    { color:'#8b949e', fontSize:14 },
-  codeBox:      { backgroundColor:'#161b22', borderRadius:12, padding:20, alignItems:'center', marginBottom:16, borderWidth:1, borderColor:'#30363d', width:'100%' },
-  codeLabel:    { color:'#8b949e', fontSize:13, marginBottom:4 },
-  codeValue:    { color:'#58a6ff', fontSize:40, fontWeight:'bold', letterSpacing:10 },
-  shareBtn:     { backgroundColor:'#1f6feb', borderRadius:10, paddingVertical:12, paddingHorizontal:24, marginBottom:20 },
-  shareBtnTxt:  { color:'#fff', fontSize:15, fontWeight:'bold' },
-  sectionTitle: { color:'#8b949e', fontSize:14, alignSelf:'flex-start', marginBottom:8 },
-  playerRow:    { width:'100%', flexDirection:'row', justifyContent:'space-between', alignItems:'center', backgroundColor:'#161b22', borderRadius:10, padding:14, marginBottom:8 },
-  playerName:   { color:'#ecf0f1', fontSize:15 },
-  readyBadge:   { paddingHorizontal:10, paddingVertical:4, borderRadius:10 },
-  readyTxt:     { color:'#fff', fontSize:12, fontWeight:'bold' },
-  lobbyBtns:    { width:'100%', gap:10, marginTop:10 },
-  readyBtn:     { backgroundColor:'#238636', borderRadius:10, padding:14, alignItems:'center' },
-  readyBtnTxt:  { color:'#fff', fontSize:15, fontWeight:'bold' },
-  startBtn:     { backgroundColor:'#3498db', borderRadius:10, padding:14, alignItems:'center' },
-  startBtnTxt:  { color:'#fff', fontSize:15, fontWeight:'bold' },
-  leaveBtn:     { backgroundColor:'#da3633', borderRadius:10, padding:14, alignItems:'center' },
-  leaveBtnTxt:  { color:'#fff', fontSize:15, fontWeight:'bold' },
-  dealerBox:    { backgroundColor:'#1e2a3a', borderRadius:12, padding:14, marginBottom:14 },
-  dealerTitle:  { color:'#ecf0f1', fontSize:16, fontWeight:'bold', marginBottom:8 },
-  turnIndicator:{ backgroundColor:'#1e2a3a', borderRadius:10, padding:12, alignItems:'center', marginBottom:12, width:'100%' },
-  turnTxt:      { color:'#ecf0f1', fontSize:15, fontWeight:'bold' },
-  actionRow:    { flexDirection:'row', gap:12, marginTop:8 },
-  hitBtn:       { flex:1, backgroundColor:'#238636', borderRadius:10, padding:16, alignItems:'center' },
-  standBtn:     { flex:1, backgroundColor:'#f39c12', borderRadius:10, padding:16, alignItems:'center' },
-  actionTxt:    { color:'#fff', fontSize:16, fontWeight:'bold' },
-  waitBox:      { backgroundColor:'#1e2a3a', borderRadius:10, padding:14, alignItems:'center', marginTop:8, width:'100%' },
-  waitTxt:      { color:'#8b949e', fontSize:14 },
-  resultEmoji:  { fontSize:64, marginBottom:10 },
-  resultTitle:  { color:'#fff', fontSize:28, fontWeight:'bold', marginBottom:20 },
-  resultRow:    { width:'100%', backgroundColor:'#161b22', borderRadius:10, padding:14, marginBottom:8, gap:4 },
-  resultName:   { color:'#ecf0f1', fontSize:16, fontWeight:'bold' },
-  resultScore:  { color:'#8b949e', fontSize:14 },
-  resultBalance:{ color:'#27ae60', fontSize:14 },
-  dealerResult: { backgroundColor:'#1e2a3a', borderRadius:10, padding:12, marginBottom:16, width:'100%' },
-  dealerResultTxt:{ color:'#ecf0f1', fontSize:14, textAlign:'center' },
-  playAgainBtn: { backgroundColor:'#3498db', borderRadius:10, paddingVertical:14, paddingHorizontal:30, marginTop:10 },
-  playAgainTxt: { color:'#fff', fontSize:16, fontWeight:'bold' },
+  bg:                    { flex:1, backgroundColor:'#0d1117' },
+  center:                { alignItems:'center', padding:20 },
+  title:                 { color:'#fff', fontSize:26, fontWeight:'bold', marginBottom:6 },
+  subtitle:              { color:'#8b949e', fontSize:16, marginBottom:20 },
+  label:                 { color:'#ecf0f1', fontSize:15, marginBottom:8 },
+  balanceBox:            { backgroundColor:'#161b22', borderRadius:10, paddingVertical:10, paddingHorizontal:16, marginBottom:16, borderWidth:1, borderColor:'#30363d' },
+  balanceTxt:            { color:'#27ae60', fontSize:16, fontWeight:'bold' },
+  betRow:                { width:'100%', marginBottom:20 },
+  betBtns:               { flexDirection:'row', gap:8 },
+  betBtn:                { backgroundColor:'#238636', paddingHorizontal:14, paddingVertical:8, borderRadius:8 },
+  betBtnTxt:             { color:'#fff', fontWeight:'bold' },
+  disabled:              { backgroundColor:'#3d444d', opacity: 0.5 },
+  modeCard:              { width:'100%', flexDirection:'row', alignItems:'center', backgroundColor:'#161b22', borderRadius:12, padding:16, marginBottom:12, borderWidth:1, borderColor:'#30363d' },
+  modeIcon:              { fontSize:28, marginRight:14 },
+  modeText:              { flex:1 },
+  modeTitle:             { color:'#fff', fontSize:16, fontWeight:'bold' },
+  modeDesc:              { color:'#8b949e', fontSize:13, marginTop:2 },
+  arrow:                 { color:'#8b949e', fontSize:22 },
+  modalBg:               { flex:1, backgroundColor:'rgba(0,0,0,0.7)', justifyContent:'center', alignItems:'center' },
+  modalBox:              { backgroundColor:'#161b22', borderRadius:16, padding:24, width:'80%', alignItems:'center' },
+  modalTitle:            { color:'#fff', fontSize:18, fontWeight:'bold', marginBottom:16 },
+  codeInput:             { backgroundColor:'#0d1117', color:'#fff', fontSize:32, textAlign:'center', borderRadius:10, padding:14, width:'100%', marginBottom:16, letterSpacing:12, borderWidth:1, borderColor:'#30363d' },
+  joinBtn:               { backgroundColor:'#238636', paddingVertical:12, paddingHorizontal:30, borderRadius:10, marginBottom:10 },
+  joinBtnTxt:            { color:'#fff', fontSize:16, fontWeight:'bold' },
+  cancelTxt:             { color:'#8b949e', fontSize:14 },
+  codeBox:               { backgroundColor:'#161b22', borderRadius:12, padding:20, alignItems:'center', marginBottom:16, borderWidth:1, borderColor:'#30363d', width:'100%' },
+  codeLabel:             { color:'#8b949e', fontSize:13, marginBottom:4 },
+  codeValue:             { color:'#58a6ff', fontSize:40, fontWeight:'bold', letterSpacing:10 },
+  shareBtn:              { backgroundColor:'#1f6feb', borderRadius:10, paddingVertical:12, paddingHorizontal:24, marginBottom:20 },
+  shareBtnTxt:           { color:'#fff', fontSize:15, fontWeight:'bold' },
+  sectionTitle:          { color:'#8b949e', fontSize:14, alignSelf:'flex-start', marginBottom:8, width:'100%' },
+  playerRow:             { width:'100%', flexDirection:'row', justifyContent:'space-between', alignItems:'center', backgroundColor:'#161b22', borderRadius:10, padding:14, marginBottom:8 },
+  playerName:            { color:'#ecf0f1', fontSize:15, fontWeight:'bold' },
+  playerBet:             { color:'#8b949e', fontSize:13, marginTop:4 },
+  readyBadge:            { paddingHorizontal:10, paddingVertical:4, borderRadius:10 },
+  readyTxt:              { color:'#fff', fontSize:12, fontWeight:'bold' },
+  lobbyBtns:             { width:'100%', gap:10, marginTop:10 },
+  readyBtn:              { backgroundColor:'#238636', borderRadius:10, padding:14, alignItems:'center', width:'100%' },
+  readyBtnTxt:           { color:'#fff', fontSize:15, fontWeight:'bold' },
+  startBtn:              { backgroundColor:'#3498db', borderRadius:10, padding:14, alignItems:'center', width:'100%' },
+  startBtnTxt:           { color:'#fff', fontSize:15, fontWeight:'bold' },
+  leaveBtn:              { backgroundColor:'#da3633', borderRadius:10, padding:14, alignItems:'center', width:'100%' },
+  leaveBtnTxt:           { color:'#fff', fontSize:15, fontWeight:'bold' },
+  dealerBox:             { backgroundColor:'#1e2a3a', borderRadius:12, padding:14, marginBottom:14, width:'100%' },
+  dealerTitle:           { color:'#ecf0f1', fontSize:16, fontWeight:'bold', marginBottom:8 },
+  turnIndicator:         { backgroundColor:'#1e2a3a', borderRadius:10, padding:12, alignItems:'center', marginBottom:12, width:'100%' },
+  turnTxt:               { color:'#ecf0f1', fontSize:15, fontWeight:'bold' },
+  actionRow:             { flexDirection:'row', gap:12, marginTop:8 },
+  hitBtn:                { flex:1, backgroundColor:'#238636', borderRadius:10, padding:16, alignItems:'center' },
+  standBtn:              { flex:1, backgroundColor:'#f39c12', borderRadius:10, padding:16, alignItems:'center' },
+  actionTxt:             { color:'#fff', fontSize:16, fontWeight:'bold' },
+  waitBox:               { backgroundColor:'#1e2a3a', borderRadius:10, padding:14, alignItems:'center', marginTop:8, width:'100%' },
+  waitTxt:               { color:'#8b949e', fontSize:14 },
+  revealBtn:             { backgroundColor:'#2d3748', borderRadius:8, paddingVertical:8, paddingHorizontal:16, alignSelf:'flex-start', marginTop:-8, marginBottom:12, marginLeft:2 },
+  revealBtnTxt:          { color:'#a0aec0', fontSize:13 },
+  resultEmoji:           { fontSize:64, marginBottom:10 },
+  resultTitle:           { color:'#fff', fontSize:28, fontWeight:'bold', marginBottom:20 },
+  resultBalanceChange:   { backgroundColor:'#1e2a3a', borderRadius:12, padding:16, marginBottom:16, width:'100%', alignItems:'center' },
+  resultBalanceChangeText:{ fontSize:28, fontWeight:'bold' },
+  resultRow:             { width:'100%', backgroundColor:'#161b22', borderRadius:10, padding:14, marginBottom:8, gap:4 },
+  resultName:            { color:'#ecf0f1', fontSize:16, fontWeight:'bold' },
+  resultScore:           { color:'#8b949e', fontSize:14 },
+  resultBalance:         { color:'#27ae60', fontSize:14, fontWeight:'bold' },
+  dealerResult:          { backgroundColor:'#1e2a3a', borderRadius:10, padding:12, marginBottom:16, width:'100%' },
+  dealerResultTxt:       { color:'#ecf0f1', fontSize:14, textAlign:'center' },
+  playAgainBtn:          { backgroundColor:'#3498db', borderRadius:10, paddingVertical:14, paddingHorizontal:30, marginTop:10, width:'100%' },
+  playAgainTxt:          { color:'#fff', fontSize:16, fontWeight:'bold', textAlign:'center' },
+  countdownTitle:        { color:'#8b949e', fontSize:18, marginBottom:16 },
+  countdownNum:          { color:'#fff', fontSize:96, fontWeight:'bold', marginBottom:24 },
+  skipBtn:               { backgroundColor:'#2d3748', borderRadius:12, paddingVertical:14, paddingHorizontal:40 },
+  skipBtnTxt:            { color:'#a0aec0', fontSize:16, fontWeight:'bold' },
 });

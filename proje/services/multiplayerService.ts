@@ -160,7 +160,8 @@ export class MultiplayerService {
       players: updatedPlayers,
       deck,
       dealerCards,
-      currentTurn: playerIds[0], // İlk oyuncu başlar
+      // 1v1/room: eş zamanlı → currentTurn null, 2v-dealer: sıra yok zaten
+      currentTurn: room.mode === '2v-dealer' ? playerIds[0] : null,
     });
   }
 
@@ -181,64 +182,50 @@ export class MultiplayerService {
       deck: newDeck,
     });
 
-    // 1v1 modunda bust olunca sırayı geç
-    if (room.mode === '1v1' && newStatus === 'bust') {
-      await this.nextTurn(room, userId);
+    // Bust olunca diğerinin bitmesini bekle (tüm modlar)
+    if (newStatus === 'bust') {
+      await this.checkAllPlayersFinished(
+        { ...room, players: { ...room.players, [userId]: { ...room.players[userId], status: 'bust', cards: newCards, score: newScore } } },
+        userId
+      );
     }
   }
 
   // ── Bekle (Stand) ────────────────────────────
   static async stand(room: MultiplayerRoom, userId: string): Promise<void> {
-    // Önce status güncelle
+    // Tüm modlar: önce status'ü yaz
     await updateDoc(doc(db, ROOMS_COLLECTION, room.roomId), {
       [`players.${userId}.status`]: 'stand',
     });
 
-    // Firestore'un yazmayı yayması için kısa bekle
-    await new Promise(r => setTimeout(r, 500));
-
-    if (room.mode === '1v1') {
-      await this.nextTurn(room, userId);
-    } else {
-      // 2v-dealer: tüm oyuncular stand/bust olunca krupiye oynar
-      await this.checkAllPlayersFinished(room, userId);
-    }
+    // Güncel state ile herkes bitti mi kontrol et
+    const simulatedRoom = {
+      ...room,
+      players: {
+        ...room.players,
+        [userId]: { ...room.players[userId], status: 'stand' as const },
+      },
+    };
+    await this.checkAllPlayersFinished(simulatedRoom, userId);
   }
 
-  // ── Sıra Geçiş (1v1) ─────────────────────────
-  static async nextTurn(room: MultiplayerRoom, currentUserId: string): Promise<void> {
-    // Güncel room'u Firestore'dan çek (stale data sorunundan kaçın)
-    const roomSnap = await getDoc(doc(db, ROOMS_COLLECTION, room.roomId));
-    const updatedRoom = roomSnap.data() as MultiplayerRoom;
-
-    const playerIds = Object.keys(updatedRoom.players);
-    const currentIndex = playerIds.indexOf(currentUserId);
-    const nextIndex = (currentIndex + 1) % playerIds.length;
-    const nextId = playerIds[nextIndex];
-    const nextPlayer = updatedRoom.players[nextId];
-
-    // Eğer sonraki oyuncu zaten bitmişse oyunu sonlandır
-    if (nextPlayer.status === 'stand' || nextPlayer.status === 'bust') {
-      await this.finishGame(updatedRoom);
-    } else {
-      await updateDoc(doc(db, ROOMS_COLLECTION, room.roomId), {
-        currentTurn: nextId,
-      });
-    }
-  }
-
-  // ── Tüm Oyuncular Bitti mi? (2v-dealer) ──────
+  // ── Tüm Oyuncular Bitti mi? ──────────────────
   static async checkAllPlayersFinished(room: MultiplayerRoom, lastUserId: string): Promise<void> {
-    // Güncel room'u Firestore'dan çek
+    // Firestore'dan taze veri çek
     const roomSnap = await getDoc(doc(db, ROOMS_COLLECTION, room.roomId));
     const updatedRoom = roomSnap.data() as MultiplayerRoom;
 
     const allFinished = Object.values(updatedRoom.players).every(
-      p => p.status === 'stand' || p.status === 'bust'
+      p => p.status === 'stand' || p.status === 'bust' || p.status === 'blackjack'
     );
 
-    if (allFinished) {
+    if (!allFinished) return;
+
+    if (updatedRoom.mode === '2v-dealer') {
       await this.dealerPlayAndFinish(updatedRoom);
+    } else {
+      // 1v1 / room: hepsi bitti → oyunu bitir
+      await this.finishGame(updatedRoom);
     }
   }
 
@@ -274,8 +261,7 @@ export class MultiplayerService {
 
     let winnerId: string | 'draw' | null = null;
 
-    if (updatedRoom.mode === '1v1') {
-      // 1v1: 21'e yakın olan kazanır
+    if (updatedRoom.mode === '1v1' || updatedRoom.mode === 'room') {
       winnerId = this.determine1v1Winner(players, playerIds);
     } else {
       // 2v-dealer: dealer'ı geçen kazanır, ikisi geçerse yüksek skor
@@ -313,14 +299,19 @@ export class MultiplayerService {
     players: { [id: string]: MultiplayerPlayer },
     playerIds: string[]
   ): string | 'draw' {
-    const scores = playerIds.map(id => ({
-      id,
-      score: players[id].status === 'bust' ? 0 : players[id].score,
-    }));
+    const busted    = playerIds.filter(id => players[id].status === 'bust');
+    const notBusted = playerIds.filter(id => players[id].status !== 'bust');
 
+    // İkisi de bust → berabere
+    if (busted.length === playerIds.length) return 'draw';
+
+    // Biri bust → diğeri kazanır
+    if (notBusted.length === 1) return notBusted[0];
+
+    // İkisi de ayakta → yüksek skor kazanır
+    const scores = notBusted.map(id => ({ id, score: players[id].score }));
     const maxScore = Math.max(...scores.map(s => s.score));
     const winners = scores.filter(s => s.score === maxScore);
-
     if (winners.length > 1) return 'draw';
     return winners[0].id;
   }
