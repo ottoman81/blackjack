@@ -25,15 +25,6 @@ export interface GameResult {
   initialBet: number;
 }
 
-// HATA GİDERME: UserStats tipinin eksik alanlarını geçici olarak burada tanımlıyoruz.
-// Normalde bu alanların '@/types/user' içindeki UserStats tipine eklenmesi gerekir.
-interface ExtendedUserStats extends UserStats {
-    loseStreak: number;
-    totalLosses: number;
-    blackjacks: number;
-    doubleDownWins: number;
-}
-
 
 export class AchievementService {
     
@@ -43,12 +34,11 @@ export class AchievementService {
 
     static async checkAndUpdateAchievements(deviceId: string, user: User, gameResult: GameResult) {
         
-        // user.stats'ı ExtendedUserStats olarak cast ediyoruz
-        const userStats = user.stats as ExtendedUserStats;
+        // user.stats artık UserStats tipinde gerekli alanları içeriyor
+        const userStats = user.stats;
         
         // 1. İstatistik Güncelleme Verisi Hazırlanıyor
-        // statsUpdate tipini Partial<ExtendedUserStats> olarak ayarlıyoruz
-        const statsUpdate: Partial<ExtendedUserStats> = {
+        const statsUpdate: Partial<UserStats> = {
             gamesPlayed: 1,
             totalBets: gameResult.betAmount
         };
@@ -59,12 +49,11 @@ export class AchievementService {
             statsUpdate.gamesWon = 1;
             statsUpdate.totalEarnings = gameResult.betAmount; 
             statsUpdate.winStreak = 1; // Seriyi 1 artır
-            // Hata giderildi: loseStreak kontrolü ExtendedUserStats ile yapıldı
             statsUpdate.loseStreak = userStats.loseStreak > 0 ? -userStats.loseStreak : 0; // Lose serisini sıfırla
             
         } else {
             statsUpdate.gamesLost = 1;
-            statsUpdate.totalLosses = gameResult.betAmount; // Hata giderildi: totalLosses eklendi
+            statsUpdate.totalLosses = gameResult.betAmount;
             statsUpdate.loseStreak = 1; // Lose serisini 1 artır
             
             // Kazanma serisini sıfırlamak için negatif değeri kullan
@@ -75,11 +64,11 @@ export class AchievementService {
         }
         
         if (gameResult.blackjack) {
-            statsUpdate.blackjacks = 1; // Hata giderildi: blackjacks eklendi
+            statsUpdate.blackjacks = 1;
         }
 
         if (gameResult.doubleDown && gameResult.win) {
-            statsUpdate.doubleDownWins = 1; // Hata giderildi: doubleDownWins eklendi
+            statsUpdate.doubleDownWins = 1;
         }
 
 
@@ -106,7 +95,6 @@ export class AchievementService {
                     break;
                 case 'blackjack_master':
                     if (gameResult.blackjack) {
-                        // userStats kullanıldı
                         newProgress = userStats.blackjacks + 1; // Firestore'daki artış sonrası değer
                         if (newProgress >= def.target) isCompleted = true;
                     }
@@ -124,7 +112,6 @@ export class AchievementService {
                     break;
                 case 'double_down_win':
                     if (gameResult.doubleDown && gameResult.win) {
-                        // userStats kullanıldı
                         newProgress = userStats.doubleDownWins + 1;
                         if (newProgress >= def.target) isCompleted = true;
                     }
@@ -132,7 +119,6 @@ export class AchievementService {
                 case 'perfect_21':
                     // Perfect 21 kontrolü: Tam 21, Blackjack değil ve 2'den fazla kart
                     if (gameResult.playerScore === 21 && !gameResult.blackjack && gameResult.playerCards.length > 2) {
-                        // HATA DÜZELTMESİ: Parantezler eklendi
                         newProgress = (user.achievements.find(a => a.achievementId === 'perfect_21')?.progress || 0) + 1;
                         if (newProgress >= def.target) isCompleted = true;
                     }
@@ -159,10 +145,8 @@ export class AchievementService {
 
 
         // 3. Atomik Güncelleme
-        // statsUpdate tipini ExtendedUserStats olarak gönderiyoruz, ancak UserService sadece UserStats alacaktır.
-        // Bu, UserService'in yalnızca tanıdığı alanları kullanacağı varsayımıyla çalışacaktır.
         await UserService.updateUserDataWithTransaction(deviceId, {
-            statsUpdate: statsUpdate as Partial<UserStats>, 
+            statsUpdate: statsUpdate, 
             achievementUpdate: achievementUpdate,
             newBalance: totalReward, // Kazanılan ödülü bakiyeye ekle
             expGained: expGained,

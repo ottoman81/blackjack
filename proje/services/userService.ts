@@ -13,7 +13,7 @@ import {
   Timestamp,
   increment 
 } from 'firebase/firestore';
-import { User, UserStats, UserAchievement, ScoreboardEntry,ChipPackage } from '@/types/user'; 
+import { User, UserStats, UserAchievement, ScoreboardEntry, ChipPackage } from '@/types/user'; 
 
 export class UserService {
   
@@ -28,6 +28,8 @@ export class UserService {
             ...userData,
             createdAt: userData.createdAt instanceof Timestamp ? userData.createdAt.toDate() : new Date(userData.createdAt.seconds * 1000),
             lastPlayed: userData.lastPlayed instanceof Timestamp ? userData.lastPlayed.toDate() : new Date(userData.lastPlayed.seconds * 1000),
+            lastDailyReward: userData.lastDailyReward ? (userData.lastDailyReward instanceof Timestamp ? userData.lastDailyReward.toDate() : new Date(userData.lastDailyReward.seconds * 1000)) : null,
+            dailyStreak: userData.dailyStreak || 0,
             achievements: userData.achievements.map((a: any) => ({
               ...a,
               // DÜZELTME: unlockedAt'ın null olabileceği kontrolü eklendi.
@@ -60,11 +62,13 @@ export class UserService {
       highScore: 0,
       createdAt: new Date(),
       lastPlayed: new Date(),
-      
+      lastDailyReward: null,
+      dailyStreak: 0,
       achievements: initialAchievements,
       stats: {
         gamesPlayed: 0, gamesWon: 0, gamesLost: 0, totalBets: 0, totalEarnings: 0,
         blackjackCount: 0, winStreak: 0, maxWinStreak: 0, doubleDownWins: 0,
+        loseStreak: 0, totalLosses: 0, blackjacks: 0,
       },
     };
 
@@ -192,6 +196,60 @@ export class UserService {
     } catch (error) {
       console.error('Skor tablosu getirme hatası:', error);
       return [];
+    }
+  }
+
+  static async claimDailyReward(deviceId: string): Promise<{ reward: number; streak: number; day: number } | null> {
+    try {
+      const userRef = doc(db, 'users', deviceId);
+      const userSnap = await getDoc(userRef);
+      
+      if (!userSnap.exists()) {
+        return null;
+      }
+      
+      const userData = userSnap.data() as any;
+      const now = new Date();
+      const lastReward = userData.lastDailyReward 
+        ? (userData.lastDailyReward instanceof Timestamp ? userData.lastDailyReward.toDate() : new Date(userData.lastDailyReward.seconds * 1000))
+        : null;
+      
+      // 24 saat kontrolü
+      if (lastReward) {
+        const hoursSinceLastReward = (now.getTime() - lastReward.getTime()) / (1000 * 60 * 60);
+        if (hoursSinceLastReward < 24) {
+          return null; // Henüz 24 saat geçmedi
+        }
+      }
+      
+      // Streak hesapla
+      let newStreak = 1;
+      if (lastReward) {
+        const hoursSinceLastReward = (now.getTime() - lastReward.getTime()) / (1000 * 60 * 60);
+        if (hoursSinceLastReward < 48) { // 48 saat içindeyse streak devam eder
+          newStreak = (userData.dailyStreak || 0) + 1;
+          if (newStreak > 7) newStreak = 1; // 7 gün döngüsü
+        }
+      }
+      
+      // Ödül hesapla: gün * 1000, 7. günde 10000 bonus
+      let reward = newStreak * 1000;
+      if (newStreak === 7) {
+        reward = 10000; // 7. gün büyük ödül
+      }
+      
+      // Firestore'a atomik yaz
+      await updateDoc(userRef, {
+        balance: increment(reward),
+        lastDailyReward: now,
+        dailyStreak: newStreak,
+        lastPlayed: now,
+      });
+      
+      return { reward, streak: newStreak, day: newStreak };
+    } catch (error) {
+      console.error('Günlük ödül alma hatası:', error);
+      throw error;
     }
   }
 }

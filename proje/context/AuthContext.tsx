@@ -1,7 +1,8 @@
 // context/AuthContext.tsx
 import { DeviceService } from '@/services/deviceService';
 import { UserService } from '@/services/userService';
-import { ChipPackage, User } from '@/types/user'; // AchievementDefinition kaldırıldı
+import { AchievementService, GameResult } from '@/services/achievementService';
+import { ChipPackage, User } from '@/types/user';
 import React, {
   createContext,
   ReactNode,
@@ -11,7 +12,6 @@ import React, {
   useMemo,
   useState
 } from 'react';
-// AchievementService kaldırıldı (kullanılmıyordu)
 
 const REFRESH_LIMIT = 3;
 const REFRESH_COOLDOWN_MS = 60000;
@@ -29,6 +29,8 @@ interface AuthContextType {
   canRefreshCollection: boolean;
   getRemainingCooldown: (source: 'scoreboard' | 'collection') => number;
   buyChips: (chipPackage: ChipPackage) => Promise<void>;
+  claimDailyReward: () => Promise<{ success: boolean; message: string; reward?: number; streak?: number; day?: number }>;
+  checkAchievements: (gameResult: GameResult) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -146,6 +148,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const handleClaimDailyReward = async () => {
+    if (!user) return { success: false, message: 'Kullanıcı kayıtlı değil.' };
+    try {
+      const result = await UserService.claimDailyReward(user.deviceId);
+      if (!result) {
+        return { success: false, message: 'Henüz 24 saat geçmedi veya kullanıcı bulunamadı.' };
+      }
+      // Local state'i güncelle
+      setUser(prev => prev ? { 
+        ...prev, 
+        balance: prev.balance + result.reward,
+        lastDailyReward: new Date(),
+        dailyStreak: result.streak
+      } : null);
+      return { 
+        success: true, 
+        message: `Günlük ödül alındı! +${result.reward} çip`, 
+        reward: result.reward, 
+        streak: result.streak, 
+        day: result.day 
+      };
+    } catch (error) {
+      console.error('❌ Günlük ödül alma hatası:', error);
+      return { success: false, message: 'Günlük ödül alınırken hata oluştu.' };
+    }
+  };
+
+  const checkAchievements = useCallback(async (gameResult: GameResult) => {
+    if (!user) return;
+    try {
+      await AchievementService.checkAndUpdateAchievements(user.deviceId, user, gameResult);
+      // Kullanıcı verisini yeniden yükle (başarımlar, istatistikler, bakiye değişimi için)
+      const refreshedUser = await UserService.getUserByDeviceId(user.deviceId);
+      if (refreshedUser) {
+        setUser(refreshedUser);
+      }
+    } catch (error) {
+      console.error('❌ Başarım kontrol hatası:', error);
+    }
+  }, [user]);
+
   const refreshUserData = useCallback(async (source: 'scoreboard' | 'collection') => {
     if (isLoading || !user) {
       return { success: false, message: 'Kullanıcı verisi yükleniyor.' };
@@ -202,6 +245,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canRefreshCollection,
     getRemainingCooldown,
     buyChips: handleBuyChips,
+    claimDailyReward: handleClaimDailyReward,
+    checkAchievements,
   };
   
   return (

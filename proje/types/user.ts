@@ -10,6 +10,10 @@ export interface User {
   createdAt: Date;
   lastPlayed: Date;
   
+  // Günlük ödül sistemi
+  lastDailyReward: Date | null;
+  dailyStreak: number;
+  
   // Başarım verileri (KALAN)
   achievements: UserAchievement[];
   stats: UserStats;
@@ -32,6 +36,11 @@ export interface UserStats {
   winStreak: number;
   maxWinStreak: number;
   doubleDownWins: number;
+  
+  // AchievementService tarafından kullanılan ek alanlar
+  loseStreak: number;
+  totalLosses: number;
+  blackjacks: number;
 }
 
 // Skor tablosu için tip tanımı (Scoreboard.tsx'te kullanılıyor)

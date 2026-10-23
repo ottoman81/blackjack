@@ -7,7 +7,7 @@ import { useAuth } from '@/context/AuthContext';
 import { BlackjackService } from '@/services/blackjackService';
 import { Card, GameState, Suit } from '@/types/blackjack';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View, ActivityIndicator } from 'react-native';
 
 type AppScreen = 'menu' | 'solo' | 'multi';
 
