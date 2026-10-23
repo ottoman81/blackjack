@@ -209,6 +209,49 @@ export class MultiplayerService {
     await this.checkAllPlayersFinished(simulatedRoom, userId);
   }
 
+  // ── Double Down ──────────────────────────────
+  static async doubleDown(room: MultiplayerRoom, userId: string): Promise<void> {
+    const player = room.players[userId];
+    if (!player || player.status !== 'playing' || player.cards.length !== 2) return;
+
+    // Bakiye kontrolü: ekstra bahis kadar bakiye olmalı
+    if (player.balance < player.betAmount) return;
+
+    const { card, newDeck } = BlackjackService.drawCard(room.deck);
+    const newCards = [...player.cards, card];
+    const newScore = BlackjackService.calculateScore(newCards);
+    const newStatus = newScore > 21 ? 'bust' : 'stand'; // Double down = 1 kart çekip stand
+
+    await updateDoc(doc(db, ROOMS_COLLECTION, room.roomId), {
+      [`players.${userId}.cards`]: newCards,
+      [`players.${userId}.score`]: newScore,
+      [`players.${userId}.status`]: newStatus,
+      [`players.${userId}.betAmount`]: player.betAmount * 2, // Bahis 2x
+      [`players.${userId}.balance`]: player.balance - player.betAmount, // Ekstra bahis düş
+      deck: newDeck,
+    });
+
+    // Bust veya stand sonrası bitiş kontrolü
+    if (newStatus === 'bust' || newStatus === 'stand') {
+      const simulatedRoom = {
+        ...room,
+        players: {
+          ...room.players,
+          [userId]: {
+            ...player,
+            cards: newCards,
+            score: newScore,
+            status: newStatus,
+            betAmount: player.betAmount * 2,
+            balance: player.balance - player.betAmount,
+          },
+        },
+        deck: newDeck,
+      };
+      await this.checkAllPlayersFinished(simulatedRoom, userId);
+    }
+  }
+
   // ── Tüm Oyuncular Bitti mi? ──────────────────
   static async checkAllPlayersFinished(room: MultiplayerRoom, lastUserId: string): Promise<void> {
     // Firestore'dan taze veri çek
