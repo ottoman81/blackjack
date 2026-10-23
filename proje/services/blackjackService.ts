@@ -12,7 +12,7 @@ export class BlackjackService {
     const newDeck: Card[] = [];
 
     // 6 Deste (Standart casino kuralı)
-    for (let deckCount = 0; deckCount < 110; deckCount++) {
+    for (let deckCount = 0; deckCount < 6; deckCount++) {
       for (const suit of suits) {
         for (const rank of ranks) {
           const value = this.getCardValue(rank);
